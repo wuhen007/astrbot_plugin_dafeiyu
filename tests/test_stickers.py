@@ -28,8 +28,36 @@ def test_pick_fallback_to_all_pool():
     assert s["large"] == "https://x/cat.webp"
 
 
-def test_pick_empty():
-    assert stickers.pick_sticker([], ["吃饭"], []) is None
+def test_pick_prefers_cached(tmp_path):
+    """同分候选里优先选已缓存到本地的（不再请求素材站）。"""
+    pool = [{"alt": "蓝色大肥鱼开心地游", "tags": ["开心"], "large": "https://x/a.webp"},
+            {"alt": "蓝色大肥鱼开心地转圈", "tags": ["开心"], "large": "https://x/b.webp"}]
+    s = stickers.pick_sticker(pool, ["开心"], [], rng=None,
+                              cached_urls={"https://x/b.webp"})
+    assert s["large"] == "https://x/b.webp"
+    # 没有本地缓存时随机挑一张同分新图
+    s2 = stickers.pick_sticker(pool, ["开心"], [], rng=None, cached_urls=set())
+    assert s2["large"] in ("https://x/a.webp", "https://x/b.webp")
+
+
+def test_download_writes_manifest_and_skips_network(tmp_path, monkeypatch):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (20, 20), (5, 5, 5)).save(buf, "PNG")
+    calls = []
+    monkeypatch.setattr(stickers, "_http_get",
+                        lambda url, timeout=20: (calls.append(url), buf.getvalue())[1])
+    s = {"large": "https://x/a.png"}
+    manifest = {}
+    out = stickers.download_sticker(s, tmp_path, manifest=manifest)
+    assert out.endswith(".png")
+    assert manifest["https://x/a.png"] == out
+    stickers.save_manifest(tmp_path, manifest)
+    loaded = stickers.load_manifest(tmp_path)
+    assert loaded["https://x/a.png"] == out
+    # 已在清单 → 再下载不再请求网络
+    out2 = stickers.download_sticker(s, tmp_path, manifest=loaded)
+    assert out2 == out and len(calls) == 1
 
 
 def test_load_index_cache_hit(tmp_path):

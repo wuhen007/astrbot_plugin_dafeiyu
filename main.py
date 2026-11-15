@@ -283,8 +283,8 @@ class DaFeiYuPlugin(Star):
         return self._STICKER_TITLE_KEY.get(result.title, "panel")
 
     def _get_sticker(self, result, pond: Pond):
-        """按指令/状态从贴图站挑一张并下载到本地；任何失败返回 None。
-        挑选种子与状态绑定：同一状态稳定命中同一张（命中本地缓存）。"""
+        """按指令/状态从贴图站挑一张；优先复用本地已缓存的贴图（减轻素材站
+        压力），挑选种子与状态绑定：同一状态稳定命中同一张。"""
         try:
             key = self._sticker_key(result)
             tags, kws = self._STICKER_MAP.get(key, self._STICKER_MAP["panel"])
@@ -293,10 +293,13 @@ class DaFeiYuPlugin(Star):
                 return None
             fish = pond.state.fish
             seed = f"{key}|{round(fish.satiety)}|{round(fish.mood)}|{round(fish.weight)}"
-            s = sticker_src.pick_sticker(stickers, tags, kws, random.Random(seed))
+            manifest = sticker_src.load_manifest(self._sticker_dir)
+            s = sticker_src.pick_sticker(stickers, tags, kws, random.Random(seed),
+                                         cached_urls=set(manifest))
             if not s:
                 return None
-            return sticker_src.download_sticker(s, self._sticker_dir / "img")
+            return sticker_src.download_sticker(s, self._sticker_dir / "img",
+                                                manifest=manifest)
         except Exception as e:
             if not self._sticker_warned:
                 self._sticker_warned = True

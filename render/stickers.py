@@ -14,11 +14,27 @@ import time
 import urllib.request
 from pathlib import Path
 
-INDEX_TTL = 6 * 3600      # 索引缓存 6 小时
+INDEX_TTL = 24 * 3600     # 索引缓存 24 小时（减少对素材站的请求）
 UA = "astrbot_plugin_dafeiyu (+https://github.com/wuhen007/astrbot_plugin_dafeiyu)"
 _FISH_MARKS = ("鱼", "鲸鱼", "肥鱼")   # alt 含这些字样的优先（蓝色大肥鱼本尊）
 # QQ 官方富媒体支持的格式；webp 会被拒（错误 850019 富媒体文件格式不支持）
 SUPPORTED_RAW = (".jpg", ".jpeg", ".png", ".gif")
+
+
+def load_manifest(cache_dir) -> dict:
+    """已下载贴图的本地清单：{large_url: 本地路径}。"""
+    p = Path(cache_dir) / "manifest.json"
+    try:
+        return json.loads(p.read_text("utf-8"))
+    except Exception:
+        return {}
+
+
+def save_manifest(cache_dir, manifest: dict) -> None:
+    p = Path(cache_dir) / "manifest.json"
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(manifest, ensure_ascii=False), "utf-8")
+    tmp.replace(p)
 
 
 def _http_get(url: str, timeout: int = 12) -> bytes:
@@ -51,8 +67,10 @@ def load_index(cache_dir: Path, url: str, ttl: int = INDEX_TTL):
     return None
 
 
-def pick_sticker(stickers, tags_want, alt_keywords, rng=None, prefer_fish=True):
-    """按 tags 精确命中(×3) + alt 关键词命中(×1) 打分取最高；并列随机。
+def pick_sticker(stickers, tags_want, alt_keywords, rng=None, prefer_fish=True,
+                 cached_urls=None):
+    """按 tags 精确命中(×3) + alt 关键词命中(×1) 打分；同分候选里**优先选
+    已缓存到本地的**（不再请求素材站），否则随机挑一张新图去下载。
     prefer_fish=True 时优先在"大肥鱼系"贴图（alt 含 鱼/鲸鱼/肥鱼）里挑。"""
     if not stickers:
         return None
@@ -64,16 +82,19 @@ def pick_sticker(stickers, tags_want, alt_keywords, rng=None, prefer_fish=True):
             pool = list(stickers)
     else:
         pool = list(stickers)
-    best, best_score = None, -1.0
     want = set(tags_want or [])
+    scored = []
     for s in pool:
         score = 3.0 * len(want & set(s.get("tags") or []))
         alt = s.get("alt", "")
         score += sum(1.0 for k in (alt_keywords or []) if k in alt)
-        score += rng.random() * 0.5
-        if score > best_score:
-            best, best_score = s, score
-    return best
+        scored.append((score, s))
+    if not scored:
+        return None
+    best_score = max(score for score, _ in scored)
+    top = [s for score, s in scored if score == best_score]
+    cached = [s for s in top if s.get("large") in (cached_urls or set())]
+    return rng.choice(cached or top)
 
 
 def _to_png(data: bytes) -> bytes:
@@ -113,14 +134,17 @@ def ensure_png(path, cache_dir) -> str:
     return str(out)
 
 
-def download_sticker(sticker, cache_dir):
-    """下载贴图到本地（按 url 哈希缓存）；非 QQ 支持格式自动转 PNG。
-    返回本地路径或 None。"""
+def download_sticker(sticker, cache_dir, manifest=None):
+    """下载贴图到本地（按 url 哈希缓存 + 记入清单）；非 QQ 支持格式自动转
+    PNG。已缓存过则不再请求素材站。返回本地路径或 None。"""
     url = sticker.get("large") or sticker.get("preview") or sticker.get("original")
     if not url:
         return None
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {} if manifest is None else manifest
+    if url in manifest and Path(manifest[url]).exists():
+        return manifest[url]          # 已缓存，直接复用
     ext = Path(url).suffix.lower() or ".webp"
     raw = cache_dir / f"{hashlib.sha1(url.encode('utf-8')).hexdigest()}{ext}"
     if not raw.exists() or raw.stat().st_size == 0:
@@ -132,11 +156,15 @@ def download_sticker(sticker, cache_dir):
         except Exception:
             return None
     if ext in SUPPORTED_RAW:
-        return str(raw)
-    try:
-        png = cache_dir / f"{raw.stem}.png"
-        if not png.exists() or png.stat().st_size == 0:
-            png.write_bytes(_to_png(raw.read_bytes()))
-        return str(png)
-    except Exception:
-        return None
+        local = str(raw)
+    else:
+        try:
+            png = cache_dir / f"{raw.stem}.png"
+            if not png.exists() or png.stat().st_size == 0:
+                png.write_bytes(_to_png(raw.read_bytes()))
+            local = str(png)
+        except Exception:
+            return None
+    manifest[url] = local
+    save_manifest(cache_dir, manifest)
+    return local
