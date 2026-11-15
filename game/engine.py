@@ -331,6 +331,7 @@ class Pond:
             "satiety": round(fish.satiety), "mood": round(fish.mood),
             "clean": round(fish.clean), "energy": round(fish.energy),
             "weight": round(fish.weight, 1),
+            "max_weight": self.cfg.max_weight,
             "period": pname,
             "pond_level": self.pond_level(),
             "pond_exp_cur": st.community_exp % step if step else 0,
@@ -452,6 +453,7 @@ class Pond:
                              lines=[f"体力只剩 {fish.energy:.0f}，玩套圈要 {p.vitality_cost:.0f}。先「投喂」补补体力。"])
             r.buttons = self._main_buttons()
             return r
+        fish.energy = actions.clamp(fish.energy - p.vitality_cost)   # 开局先耗体力
         self.state.pending_play = {
             "hidden": self.rng.randrange(3),
             "opened_by": uid,
@@ -461,6 +463,7 @@ class Pond:
         fish.cooldowns["play"] = self.clock()
         r = ActionResult(event="game_open", title="套圈小游戏",
                          lines=[actions.choice(self.rng, actions.PLAY_OPEN)])
+        r.deltas = {"活力": -p.vitality_cost}
         r.buttons = [Button("泡泡①", "养鱼 玩耍 1"), Button("泡泡②", "养鱼 玩耍 2"),
                      Button("泡泡③", "养鱼 玩耍 3"), Button("养鱼", "养鱼")]
         r.data = {"game": "shells", "opened_by": user.display_name}

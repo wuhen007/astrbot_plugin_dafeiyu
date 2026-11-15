@@ -111,6 +111,7 @@ def test_play_success_and_miss():
     pond, clock = make_pond()
     r = pond.handle("u1", "小明", "玩耍")
     assert r.event == "game_open"
+    assert pond.state.fish.energy == pytest.approx(60.0)    # 开局扣 20 活力
     pending = pond.state.pending_play
     assert pending is not None
     hidden = pending["hidden"]
