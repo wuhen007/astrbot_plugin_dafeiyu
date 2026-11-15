@@ -275,12 +275,14 @@ def test_slash_message_reaches_panel(plugin):
 
 
 def test_custom_fish_image_folder(plugin):
+    """fish_imgs/ 有贴图时嵌入状态卡（卡图仍是生成的 png）。"""
     main, p, tmp = plugin
     from PIL import Image as PILImage
     img_dir = tmp / "fish_imgs"
     img_dir.mkdir()
-    PILImage.new("RGB", (32, 32), (10, 20, 30)).save(img_dir / "a.png")
+    PILImage.new("RGBA", (64, 48), (10, 20, 30, 255)).save(img_dir / "a.png")
     results = _run(_gather(p._dispatch(FakeEvent(), "养鱼")))
     imgs = [c for c in results[0].chain if isinstance(c, IMAGE_CLS)]
     assert imgs
-    assert imgs[0].path.endswith("a.png")
+    card = Path(imgs[0].path)
+    assert card.exists() and card.suffix == ".png"

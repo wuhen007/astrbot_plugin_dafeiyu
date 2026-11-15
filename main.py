@@ -30,7 +30,8 @@ if str(PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(PLUGIN_DIR))
 
 from game import COMMANDS, GameConfig, JsonStore, load_or_create          # noqa: E402
-from render import render_fish_png, render_markdown, render_plain         # noqa: E402
+from render import render_card_png, render_markdown, render_plain         # noqa: E402
+from render.textcard import delta_line                                    # noqa: E402
 
 # ---------------------------------------------------------------- 版本兼容层
 # v4.29.x：astrbot.api.event.filter 包提供 command / button_action 独立装饰器；
@@ -161,8 +162,8 @@ class DaFeiYuPlugin(Star):
             self._ponds[session] = pond
         return pond
 
-    def _pick_image(self, session: str, pond: Pond) -> str:
-        """自定义鱼图目录（fish_imgs/）优先随机取一张；否则实时画鱼。"""
+    def _pick_custom_img(self):
+        """自定义鱼形象目录（fish_imgs/）里随机取一张；没有则 None。"""
         try:
             if self._custom_img_dir.is_dir():
                 imgs = [p for p in self._custom_img_dir.iterdir()
@@ -170,10 +171,32 @@ class DaFeiYuPlugin(Star):
                 if imgs:
                     return str(random.choice(imgs))
         except Exception as e:
-            logger.warning(f"[肥鱼养成记] 自定义鱼图读取失败，改用实时画鱼：{e}")
+            logger.warning(f"[肥鱼养成记] 自定义鱼图读取失败，改用内置画鱼：{e}")
+        return None
+
+    def _build_card_image(self, session: str, pond: Pond, result) -> str:
+        """整张状态卡画成图片：文本面板（卡片文案去按钮提示行）+ 鱼塘场景。"""
+        lines = [ln for ln in render_markdown(result).split("\n")
+                 if not ln.startswith("[")]
+        custom = self._pick_custom_img()
         h = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
-        return render_fish_png(pond.state, str(self._image_dir / f"{h}.png"),
-                               config=pond.cfg)
+        return render_card_png(pond.state, lines, str(self._image_dir / f"{h}.png"),
+                               config=pond.cfg, custom_img=custom)
+
+    def _one_liner(self, result) -> str:
+        """键盘消息的正文：单行摘要（面板详情在图里），压平插件改不动它。"""
+        if result.event == "panel":
+            d = result.data
+            return md_text(f"【🐟 {d['name']} · {d['stage']}】点按钮互动，发「帮助」看玩法")
+        if result.event in ("graduated", "runaway"):
+            s = (result.data or {}).get("summary", {})
+            return md_text(f"【{result.title}】评级 {s.get('grade', 'C')} · 详情见图")
+        first = result.lines[0] if result.lines else ""
+        base = f"【{result.title}】{first}"
+        dl = delta_line(result.deltas)
+        if dl:
+            base = f"{base} ｜ {dl}"
+        return md_text(base)
 
     def _build_rows(self, result):
         """引擎按钮 → ActionRow（每行 3 个）。data 用 dict {"act","arg"}；
@@ -210,12 +233,11 @@ class DaFeiYuPlugin(Star):
         return rows
 
     def _build_result(self, event, result):
-        """「文本 + 键盘」消息：markdown 模式且有按钮组件走 msg_type=2；
-        否则纯文本（msg_type=0，\\n 原生换行）。图片不在这里发（见 _dispatch）。"""
+        """「单行摘要 + 键盘」消息：markdown 模式且有按钮组件走 msg_type=2；
+        否则纯文本全量卡片（msg_type=0，\\n 原生换行）。图片不在这里发。"""
         rows = self._build_rows(result) if self._md_mode else []
         if rows:
-            text = md_text(render_markdown(result))
-            res = event.chain_result([Plain(text), *rows])
+            res = event.chain_result([Plain(self._one_liner(result)), *rows])
             try:
                 res.use_markdown(True)
             except Exception:
@@ -232,14 +254,14 @@ class DaFeiYuPlugin(Star):
             async with lock:
                 pond = self._get_pond(event)
                 result = pond.handle(uid, name, command, arg)
-            # ① 鱼图：按钮交互事件的图片被动回复会被 QQ 拒绝，一律跳过
+            # ① 状态卡图：按钮交互事件的图片被动回复会被 QQ 拒绝，一律跳过
             if self._send_image and Image is not None \
                     and event.get_button_interaction() is None:
                 try:
-                    img_path = self._pick_image(session, pond)
+                    img_path = self._build_card_image(session, pond, result)
                     yield event.image_result(img_path)
                 except Exception as e:
-                    logger.warning(f"[肥鱼养成记] 画鱼失败，跳过：{e}")
+                    logger.warning(f"[肥鱼养成记] 画卡失败，跳过：{e}")
             # ② 文本 + 键盘
             yield self._build_result(event, result)
         except Exception as e:

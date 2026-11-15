@@ -8,7 +8,7 @@ from game import GameConfig, Pond
 
 pil = pytest.importorskip("PIL")
 
-from render.fishimg import render_fish_png  # noqa: E402
+from render.fishimg import render_card_png, render_fish_png  # noqa: E402
 
 
 class FakeClock:
