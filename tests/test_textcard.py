@@ -79,6 +79,7 @@ def test_markdown_panel():
     md = render_markdown(r)
     assert md.startswith("# 🐟")
     assert "**饱腹**" in md and "**成长**" in md
+    assert "\n\n" in md          # QQ md 单 \n 不换行，分段用空行
 
 
 def test_settlement_plain():

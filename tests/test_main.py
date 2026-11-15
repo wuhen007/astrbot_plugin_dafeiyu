@@ -248,11 +248,11 @@ def test_slash_message_reaches_panel(plugin):
     assert any("鱼籽" in t for t in _plain_texts(results[0]))
 
 
-def test_default_mode_is_text(plugin):
-    """未配置 output_mode 时默认纯文本（QQ 官方 md 权限未开通的友好降级）。"""
+def test_default_mode_is_markdown(plugin):
+    """未配置 output_mode 时默认 markdown（QQ 官方群/单聊 md 已全量开放）。"""
     main, p, tmp = plugin
     p2 = main.DaFeiYuPlugin(None, main.AstrBotConfig({"data_dir": str(tmp)}))
-    assert p2._md_mode is False
+    assert p2._md_mode is True
 
 
 def test_custom_fish_image_folder(plugin):

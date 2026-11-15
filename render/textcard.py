@@ -79,18 +79,30 @@ def render_plain(result) -> str:
 
 
 # ---------------------------------------------------------------- QQ markdown
+# QQ 官方 md 语法子集（2026-04 起群/单聊全量开放）：支持 #/## 标题、**加粗**、
+# 链接、图片、列表、> 引用；单个 \n 不换行 —— 分段用空行（\n\n）最稳。
 def _md_panel_lines(result) -> List[str]:
     d = result.data
     flavor = result.lines[0] if result.lines else ""
-    lines = [f"# 🐟 {d['name']} · {d['stage']}", f"**{d['period']}** · {flavor}"]
-    for label, key in _STAT_KEYS:
-        lines.append(f"**{label}** {bar(d[key])} {d[key]}/100")
+    stats = "　".join(f"**{label}** {bar(d[key], width=6)} {d[key]}"
+                      for label, key in _STAT_KEYS)
     if d.get("exp_need"):
-        lines.append(f"**成长** Lv.{d['level']} {d['stage']} · 经验 {d['exp_cur']}/{d['exp_need']}")
+        growth = (f"**成长** Lv.{d['level']} {d['stage']} · 经验 {d['exp_cur']}/{d['exp_need']} "
+                  f"{bar(d['exp_cur'], width=6, max_value=d['exp_need'])}")
     else:
-        lines.append(f"**成长** Lv.{d['level']} {d['stage']} · 已满阶")
-    lines.append(f"**体重** {d['weight']}/{d.get('max_weight', 100.0)} · "
-                 f"**鱼塘** Lv.{d['pond_level']} · 全群互动 {d['pond_exp_cur']}/{d['pond_exp_need']}")
+        growth = f"**成长** Lv.{d['level']} {d['stage']} · 已满阶"
+    mw = d.get("max_weight", 100.0)
+    pond = (f"**体重** {bar(d['weight'], width=6, max_value=mw)} {d['weight']}/{mw} · "
+            f"**鱼塘** Lv.{d['pond_level']} · 全群互动 {d['pond_exp_cur']}/{d['pond_exp_need']}")
+    lines = [
+        f"# 🐟 {d['name']} · {d['stage']}",
+        f"**{d['period']}** · {flavor}",
+        stats,
+        growth,
+        pond,
+    ]
+    if d.get("offline"):
+        lines.append(f"（这段时间：{delta_line(d['offline'])}）")
     if d.get("top_keeper"):
         lines.append(f"👑 最上心的鱼友：{d['top_keeper']}（亲密 {d['top_intimacy']}）")
     if d.get("eligible"):
@@ -110,4 +122,4 @@ def render_markdown(result) -> str:
         if dl:
             body.append(f"**变化**：{dl}")
         body.append(buttons_line(result))
-    return "\n".join(body)
+    return "\n\n".join(body)

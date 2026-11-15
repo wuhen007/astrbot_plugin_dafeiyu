@@ -58,6 +58,13 @@ except ImportError:
         pass
 _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 
+# Markdown 组件：旧版 AstrBot 的 qqofficial 适配器靠它识别 md 消息；v4 master 无此类
+_MDClass = None
+try:
+    from astrbot.api.message_components import Markdown as _MDClass       # noqa: E402
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------- 常量
 _ACTION_KEYS = ("投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "排行", "排行榜",
                 "档案", "图鉴", "出栏", "再养一条", "帮助")
@@ -101,7 +108,7 @@ class DaFeiYuPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         self.context = context
         raw = dict(config) if config is not None else {}
-        self._md_mode = raw.get("output_mode", "text") == "markdown"
+        self._md_mode = raw.get("output_mode", "markdown") == "markdown"
         self._send_image = raw.get("send_image", True)
         scale = _DIFF_SCALE.get(raw.get("difficulty", "标准"), 1.0)
         self._cfg = GameConfig()
@@ -173,7 +180,11 @@ class DaFeiYuPlugin(Star):
                 chain.append(Image.fromFileSystem(img_path))
             except Exception as e:
                 logger.warning(f"[肥鱼养成记] 画鱼失败，跳过：{e}")
-        chain.append(Plain(text))
+        if self._md_mode and _MDClass is not None:
+            # 旧版适配器：链里带 Markdown 组件才会走 md 消息
+            chain.append(_MDClass(content=text))
+        else:
+            chain.append(Plain(text))
         chain.extend(self._build_rows(result))
         res = event.chain_result(chain)
         try:

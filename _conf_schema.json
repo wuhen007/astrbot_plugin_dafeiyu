@@ -1,9 +1,9 @@
 {
   "output_mode": {
-    "description": "输出形态：text=纯文本排版（无需QQ官方权限，默认）；markdown=Markdown卡片（需在QQ开放平台开通群聊原生Markdown权限，未开通会降级成乱排版）",
+    "description": "输出形态：markdown=卡片+按钮（QQ官方群/单聊 md 与按钮已全量开放，默认）；text=纯文本排版（保守选项，若 md 显示异常可切回）",
     "type": "string",
-    "default": "text",
-    "options": ["text", "markdown"]
+    "default": "markdown",
+    "options": ["markdown", "text"]
   },
   "send_image": {
     "description": "随消息发送鱼图：优先用 fish_imgs/ 自定义形象，否则实时画鱼（需安装 Pillow）",
