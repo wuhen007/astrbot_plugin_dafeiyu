@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import random
 import re
@@ -79,13 +80,65 @@ _ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排�
 _NICK_ARG_RE = re.compile("(?:昵称|改名)\\s*(.+)$")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
+_DFY_CMD_PREFIX = "dfycmd:"   # 指令按钮 id 前缀（点击后 QQ 客户端代发指令文本）
 _DIFF_SCALE = {"休闲": 0.7, "标准": 1.0, "硬核": 1.4}
 _BTN_TIMEOUT = 600          # 按钮有效期（秒），过期走 fallback_text 提示文字指令
 _LABEL_MAX = 16
 _ID_MAX = 64
 
+
+def _dfy_upgrade_keyboard(kb):
+    """把 id 带 dfycmd: 前缀（b64 编码指令文本）的按钮升级为 QQ 指令按钮
+    （action.type=2）：点击后由 QQ 客户端以用户身份把指令发进群里——与
+    原版"点按钮=发指令"体验一致。结构不符时静默跳过，按钮自动退回回调
+    交互模式（on_button 兜底路由）。"""
+    content = (kb or {}).get("content") or {}
+    for row in content.get("rows") or []:
+        for btn in row.get("buttons") or []:
+            bid = str((btn or {}).get("id") or "")
+            if not bid.startswith(_DFY_CMD_PREFIX) or not isinstance(btn.get("action"), dict):
+                continue
+            try:
+                cmd = base64.urlsafe_b64decode(
+                    bid[len(_DFY_CMD_PREFIX):].encode("ascii")).decode("utf-8")
+            except Exception:
+                continue
+            if cmd:
+                btn["action"]["type"] = 2
+                btn["action"]["data"] = cmd if cmd.startswith("/") else f"/{cmd}"
+
+
+def _install_command_button_patch() -> bool:
+    """对 qqofficial 适配器的 _parse_keyboard 挂后处理（幂等、失败无害）。"""
+    try:
+        from astrbot.core.platform.sources.qqofficial.qqofficial_message_event import (
+            QQOfficialMessageEvent)
+    except Exception:
+        return False
+    orig = getattr(QQOfficialMessageEvent, "_parse_keyboard", None)
+    if orig is None or getattr(QQOfficialMessageEvent, "_dfy_cmd_patched", False):
+        return bool(getattr(QQOfficialMessageEvent, "_dfy_cmd_patched", False))
+
+    def patched(message_chain):
+        kb = orig(message_chain)
+        try:
+            _dfy_upgrade_keyboard(kb)
+        except Exception:
+            pass
+        return kb
+
+    try:
+        QQOfficialMessageEvent._parse_keyboard = patched
+        QQOfficialMessageEvent._dfy_cmd_patched = True
+        return True
+    except Exception:
+        return False
+
+
 logger.info("[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰器=%s 按钮装饰器=%s",
             _HAS_BUTTONS, _command_dec is not None, _button_dec is not None)
+logger.info("[肥鱼养成记] 指令按钮补丁（点按钮=发指令）：%s",
+            "已安装" if _install_command_button_patch() else "不可用（退回回调交互按钮）")
 
 
 def md_text(text: str) -> str:
@@ -214,7 +267,10 @@ class DaFeiYuPlugin(Star):
             act = parts[0] if parts else "养鱼"
             arg = parts[1] if len(parts) > 1 else None
             label = str(b.label)[:_LABEL_MAX]
-            ident = f"{_BTN_PREFIX}{act}|{arg or ''}|{label}"[:_ID_MAX]
+            # 指令按钮：id 携带 b64 指令文本，适配器补丁升级为 action.type=2
+            cmd = f"{act} {arg}".strip() if arg else act
+            ident = _DFY_CMD_PREFIX + base64.urlsafe_b64encode(
+                cmd.encode("utf-8")).decode("ascii")[:_ID_MAX - len(_DFY_CMD_PREFIX)]
             items.append((ident, label, {"act": act, "arg": arg}))
         rows = []
         for i in range(0, len(items), 3):
@@ -301,7 +357,7 @@ class DaFeiYuPlugin(Star):
             if inter is None:
                 return
             aid = getattr(inter, "action_id", "") or ""
-            if not aid.startswith(_BTN_PREFIX):
+            if not aid.startswith((_BTN_PREFIX, _DFY_CMD_PREFIX)):
                 return
             data = getattr(inter, "data", None)
             if isinstance(data, dict):

@@ -201,8 +201,9 @@ def test_feed_two_messages_image_then_kb(plugin):
 
 def test_button_click_routes_and_skips_image(plugin):
     main, p, tmp = plugin
-    inter = types.SimpleNamespace(action_id="dfy:投喂||投喂",
-                                  data={"act": "投喂", "arg": None})
+    inter = types.SimpleNamespace(action_id="dfycmd:" + main.base64.urlsafe_b64encode(
+        "养鱼 投喂".encode()).decode(),
+        data={"act": "投喂", "arg": None})
     ev = FakeEvent(interaction=inter)
     results = _run(_gather(p.on_button(ev)))
     assert len(results) == 1                     # 交互事件不发图
@@ -216,7 +217,8 @@ def test_button_play_pick(plugin):
     _run(_gather(p._dispatch(FakeEvent(), "玩耍")))
     hidden = _saved_state(tmp)["pending_play"]["hidden"]
     inter = types.SimpleNamespace(
-        action_id=f"dfy:玩耍|{hidden + 1}|泡泡",
+        action_id="dfycmd:" + main.base64.urlsafe_b64encode(
+            f"养鱼 玩耍 {hidden + 1}".encode()).decode(),
         data={"act": "玩耍", "arg": str(hidden + 1)})
     results = _run(_gather(p.on_button(FakeEvent(interaction=inter))))
     assert any("体重 +3" in t for t in _texts(results[-1]))
@@ -245,9 +247,29 @@ def test_button_rows_layout(plugin):
     first = rows[0].buttons
     assert [b.label for b in first] == ["投喂", "加餐", "逗鱼"]
     b0 = first[0]
-    assert b0.id == "dfy:投喂||投喂"
+    assert b0.id.startswith("dfycmd:")
+    cmd = main.base64.urlsafe_b64decode(
+        b0.id[len("dfycmd:"):].encode()).decode("utf-8")
+    assert cmd == "投喂"
     assert b0.action.data == {"act": "投喂", "arg": None}
     assert rows[0].action_timeout == 600
+
+
+def test_dfy_upgrade_keyboard_marks_command_buttons(plugin):
+    """指令按钮补丁：dfycmd: 前缀按钮 → action.type=2 + data=/指令。"""
+    main, _, _ = plugin
+    b64 = main.base64.urlsafe_b64encode("投喂".encode()).decode()
+    kb = {"content": {"rows": [{"buttons": [
+        {"id": f"dfycmd:{b64}", "render_data": {"label": "投喂"},
+         "action": {"type": 1, "data": "astrbot:token"}},
+        {"id": "other:btn", "render_data": {"label": "别的"},
+         "action": {"type": 1, "data": "astrbot:token2"}},
+    ]}]}}
+    main._dfy_upgrade_keyboard(kb)
+    btns = kb["content"]["rows"][0]["buttons"]
+    assert btns[0]["action"]["type"] == 2
+    assert btns[0]["action"]["data"] == "/投喂"
+    assert btns[1]["action"]["type"] == 1        # 别家按钮不动
 
 
 def test_text_mode_uses_plain(plugin):
