@@ -78,6 +78,51 @@ class WeighAction:
 
 
 @dataclass
+class SignConfig:
+    """每日打卡。"""
+    base: int = 1          # 基础海苔片
+    streak3: int = 2       # 连续 ≥3 天追加
+    streak7: int = 3       # 连续 ≥7 天追加（取更高档）
+
+
+@dataclass
+class FishingAction:
+    """一键钓鱼：概率表按顺序累计，剩余概率为宝箱。"""
+    cooldown_min: int = 30
+    exp: int = 4
+    p_food: float = 0.40        # 海苔片 +1
+    p_shell: float = 0.25       # 心情 +8（好看的贝壳）
+    p_bigfood: float = 0.15     # 体重 +2（大颗鱼粮）
+    p_weed: float = 0.12        # 空 —— 心情 +2（水草安慰奖）
+    mood_shell: float = 8.0
+    mood_weed: float = 2.0
+    weight_bigfood: float = 2.0
+    chest_snacks: int = 3       # 宝箱：海苔片 +3
+
+
+@dataclass
+class RescueConfig:
+    """求援事件：照料后概率刷出，全群协作。"""
+    chance: float = 0.10        # 每次照料动作触发概率
+    need: int = 2               # 需要人数
+    expire_min: int = 10        # 过期时间（分钟）
+    reward_snacks: int = 2      # 参与者每人海苔片
+    reward_mood: float = 10.0   # 完成时鱼心情
+    expire_mood_loss: float = 5.0  # 无人救援过期时鱼心情
+
+
+@dataclass
+class WishConfig:
+    """许愿池：花海苔片随机换增益。"""
+    cost: int = 2               # 海苔片消耗
+    exp: int = 6
+    mood_gain: float = 20.0
+    energy_gain: float = 40.0
+    weight_gain: float = 3.0
+    refund: int = 1             # 谢谢参与时返还海苔片
+
+
+@dataclass
 class GameConfig:
     # --- 自然变化（每小时） ---
     decay_satiety: float = 2.5
@@ -133,3 +178,7 @@ class GameConfig:
     clean: CleanAction = field(default_factory=CleanAction)
     play: PlayAction = field(default_factory=PlayAction)
     weigh: WeighAction = field(default_factory=WeighAction)
+    sign: SignConfig = field(default_factory=SignConfig)
+    fishing: FishingAction = field(default_factory=FishingAction)
+    rescue: RescueConfig = field(default_factory=RescueConfig)
+    wish: WishConfig = field(default_factory=WishConfig)

@@ -64,6 +64,8 @@ class UserInfo:
     total_interactions: int = 0
     snacks: int = 0            # 海苔片钱包（跨鱼保留）
     last_bonus_day: Optional[str] = None
+    last_sign_day: Optional[str] = None   # 最后打卡日（YYYY-MM-DD）
+    sign_streak: int = 0                  # 连续打卡天数
 
     def to_dict(self) -> dict:
         return {
@@ -71,6 +73,7 @@ class UserInfo:
             "intimacy": self.intimacy,
             "total_interactions": self.total_interactions, "snacks": self.snacks,
             "last_bonus_day": self.last_bonus_day,
+            "last_sign_day": self.last_sign_day, "sign_streak": self.sign_streak,
         }
 
     @classmethod
@@ -83,6 +86,8 @@ class UserInfo:
             total_interactions=int(d.get("total_interactions", 0)),
             snacks=int(d.get("snacks", 0)),
             last_bonus_day=d.get("last_bonus_day"),
+            last_sign_day=d.get("last_sign_day"),
+            sign_streak=int(d.get("sign_streak", 0)),
         )
 
 
@@ -99,6 +104,7 @@ class PondState:
     users: Dict[str, UserInfo] = field(default_factory=dict)
     community_exp: int = 0             # 全群累计互动数（鱼塘等级进度）
     pending_play: Optional[Dict] = None   # 套圈进行中：{hidden, opened_by, opened_by_name, opened_at}
+    pending_rescue: Optional[Dict] = None  # 求援进行中：{kind, text, need, got: {uid: name}, expires}
     archive: List[Dict] = field(default_factory=list)   # 出栏图鉴
 
     def to_dict(self) -> dict:
@@ -110,6 +116,7 @@ class PondState:
             "users": {k: v.to_dict() for k, v in self.users.items()},
             "community_exp": self.community_exp,
             "pending_play": self.pending_play,
+            "pending_rescue": self.pending_rescue,
             "archive": list(self.archive),
         }
 
@@ -127,5 +134,6 @@ class PondState:
             users={k: UserInfo.from_dict(v) for k, v in (d.get("users") or {}).items()},
             community_exp=int(d.get("community_exp", 0)),
             pending_play=d.get("pending_play"),
+            pending_rescue=d.get("pending_rescue"),
             archive=list(d.get("archive") or []),
         )

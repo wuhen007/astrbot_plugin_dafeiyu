@@ -87,11 +87,13 @@ _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 
 # ---------------------------------------------------------------- 常量
 _ACTION_KEYS = ("投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "排行", "排行榜",
-                "档案", "图鉴", "出栏", "再养一条", "昵称", "改名", "帮助")
+                "档案", "图鉴", "出栏", "再养一条", "昵称", "改名", "帮助",
+                "签到", "打卡", "钓鱼", "救援", "许愿")
 _BASE_CMDS = set(_ACTION_KEYS) | {"养鱼"}
 # 别名 = 子指令 ∪ 主指令「养鱼」∪ /、# 前缀变体（QQ 官方用户习惯 /指令）
 _ALIAS_NAMES = _BASE_CMDS | {f"{p}{k}" for k in _BASE_CMDS for p in ("/", "#")}
-_ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排行榜|档案|图鉴|出栏|再养一条|昵称|改名|帮助)")
+_ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排行榜|档案|图鉴|出栏"
+                        "|再养一条|昵称|改名|签到|打卡|钓鱼|救援|许愿|帮助)")
 _NICK_ARG_RE = re.compile("(?:昵称|改名)\\s*(.+)$")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
@@ -262,11 +264,16 @@ class DaFeiYuPlugin(Star):
         "runaway": (["难过", "委屈"], ["走", "离开", "哭"]),
         "need_nick": (["卖萌"], ["你好", "报到", "初次"]),
         "panel": (["开心", "得意"], ["开心", "游"]),
+        "sign": (["开心", "卖萌"], ["打卡", "签到"]),
+        "fishing": (["搞笑", "摸鱼"], ["钓", "鱼竿"]),
+        "rescue": (["震惊", "无语"], ["救", "缠"]),
+        "wish": (["卖萌"], ["愿", "星"]),
     }
     _STICKER_TITLE_KEY = {"投喂": "feed", "加餐": "snack", "逗鱼": "pet",
                           "净水": "clean", "称重": "weigh", "稍等一下": "cooldown",
                           "套圈小游戏": "play_open", "套圈": "play",
-                          "名号登记": "pet"}
+                          "名号登记": "pet", "每日打卡": "sign", "钓鱼": "fishing",
+                          "求援中": "rescue", "救援成功": "sign", "许愿池": "wish"}
 
     def _sticker_key(self, result) -> str:
         if result.event in ("panel", "graduated", "runaway", "need_nick"):

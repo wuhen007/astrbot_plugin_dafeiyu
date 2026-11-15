@@ -117,15 +117,25 @@ def auto(cfg: GameConfig, data_dir: Path, use_md: bool, neglect: bool):
     while pond.state.status == "alive" and steps < 400:
         steps += 1
         fish = pond.state.fish
+        # 达标确认前先 touch 刷新（自然衰减/求援过期都可能改变数值）
         if pond._eligible():
-            r = pond.handle("auto", "自动玩家", "出栏")
-            show_card(pond, r, use_md)
-            break
+            pond.handle("auto", "自动玩家", "养鱼")
+            if pond._eligible():
+                r = pond.handle("auto", "自动玩家", "出栏")
+                show_card(pond, r, use_md)
+                break
+        # 求援事件：两位虚拟鱼友协作完成（转危为机，还加心情）
+        if pond.state.pending_rescue and pond.state.status == "alive":
+            pond.handle("auto", "自动玩家", "救援")
+            r = pond.handle("auto2", "二号鱼友", "救援")
+            if r.event == "rescue":
+                print(f"[{steps:03d}] 救援成功  {delta_line(r.deltas)}")
+            continue
         if fish.satiety < 55:
             cmd, cd = "投喂", p.feed.cooldown_min
         elif fish.clean < 45:
             cmd, cd = "净水", p.clean.cooldown_min
-        elif fish.mood < 62:
+        elif fish.mood < 68:
             cmd, cd = "逗鱼", p.pet.cooldown_min
         elif fish.energy >= p.play.vitality_cost and \
                 pond._cooldown_left("play", p.play.cooldown_min) == 0:
