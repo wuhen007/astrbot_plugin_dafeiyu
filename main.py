@@ -299,33 +299,6 @@ class DaFeiYuPlugin(Star):
         return render_fish_png(pond.state, str(self._image_dir / f"{h}.png"),
                                config=pond.cfg)
 
-    def _one_liner(self, result) -> str:
-        """键盘消息的正文：单行摘要（全量状态在面板图里，压平插件改不动单行）。"""
-        if result.event == "need_nick":
-            return md_text("【初次见面】直接回复你的名字就行（12 字内），"
-                           "也可发「养鱼 昵称 名字」")
-        if result.event == "panel":
-            d = result.data
-            base = f"【🐟 {d['name']} · {d['stage']}】点按钮互动，发「帮助」看玩法"
-        elif result.event in ("graduated", "runaway"):
-            s = (result.data or {}).get("summary", {})
-            base = f"【{result.title}】评级 {s.get('grade', 'C')} · 详情见图"
-        else:
-            first = result.lines[0] if result.lines else ""
-            base = f"【{result.title}】{first}"
-            dl = delta_line(result.deltas)
-            if dl:
-                base = f"{base} ｜ {dl}"
-        return md_text(base)
-
-    def _render_panel(self, session: str, pond: Pond, result) -> str:
-        """状态文字渲染成白底面板图（排版绝对稳定，不受平台文本改写影响）。"""
-        lines = [ln for ln in render_markdown(result).split("\n")
-                 if not ln.startswith("[")]          # 按钮提示行去掉（键盘上有真按钮）
-        h = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
-        return render_card_png(pond.state, lines, str(self._image_dir / f"{h}.png"),
-                               config=pond.cfg, scene=False)
-
     def _md(self, text: str) -> str:
         return md_text(text)
 
@@ -367,11 +340,15 @@ class DaFeiYuPlugin(Star):
         return rows
 
     def _build_result(self, event, result):
-        """「单行摘要 + 指令按钮」：全量状态在面板图里（排版稳定），
-        文本只留一行（压平插件改不动单行）。"""
+        """「多行文本卡 + 指令按钮」：markdown 模式且有按钮组件走 msg_type=2
+        （_md 把每行变成独立段落）；否则纯文本全量卡片（\\n 原生换行）。
+        排版前提：服务器 single_line 插件放行（command_prefixes 含 / 或 养鱼）。
+        有真按钮时不再输出 [按钮] 提示行（避免重复暴露）。"""
         rows = self._build_rows(result) if self._md_mode else []
         if rows:
-            res = event.chain_result([Plain(self._one_liner(result)), *rows])
+            text = "\n".join(ln for ln in render_markdown(result).split("\n")
+                             if not ln.startswith("["))
+            res = event.chain_result([Plain(self._md(text)), *rows])
             try:
                 res.use_markdown(True)
             except Exception:
@@ -391,13 +368,10 @@ class DaFeiYuPlugin(Star):
             if result.event == "need_nick":
                 # 引导免费文本回昵称（180s 内的下一条非指令消息即登记）
                 self._pending[(session, uid)] = time.time() + _NICK_TTL
-            # ① 状态面板图 + 贴图原图直发（交互事件不发图）
+            # ① 贴图原图直发（不合成背景）；交互事件不发图
             if self._send_image and Image is not None \
                     and event.get_button_interaction() is None:
                 try:
-                    panel_path = await asyncio.to_thread(
-                        self._render_panel, session, pond, result)
-                    yield event.image_result(panel_path)
                     custom = await asyncio.to_thread(self._get_sticker, result, pond)
                     if custom is None:
                         custom = self._pick_custom_img()
@@ -407,7 +381,7 @@ class DaFeiYuPlugin(Star):
                         yield event.image_result(custom)
                 except Exception as e:
                     logger.warning(f"[肥鱼养成记] 发图失败，跳过：{e}")
-            # ② 单行摘要 + 指令按钮
+            # ② 多行文本卡 + 指令按钮（排版依赖 single_line 配置放行，见 README）
             yield self._build_result(event, result)
         except Exception as e:
             logger.exception("[肥鱼养成记] 处理指令 %r 失败", command)

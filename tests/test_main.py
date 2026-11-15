@@ -198,12 +198,13 @@ def test_feed_two_messages_image_then_kb(plugin):
     main, p, tmp = plugin
     ev = FakeEvent()
     results = _run(_gather(p._dispatch(ev, "投喂")))
-    assert len(results) == 3                     # ① 面板图 ② 鱼图直发 ③ 摘要+按钮
-    assert results[0].image is True and results[1].image is True
-    kb = results[2]
+    assert len(results) == 2                     # ① 鱼图直发 ② 多行文本卡+按钮
+    assert results[0].image is True
+    kb = results[1]
     assert kb.md is True
     texts = "\n".join(_texts(kb))
     assert "【投喂】" in texts and "饱腹 +22" in texts
+    assert "[投喂]" not in texts                 # 真按钮存在时不再暴露提示行
     rows = _rows(kb, main)
     assert rows and rows[0].action_timeout == 86400
     assert _saved_state(tmp)["fish"]["exp"] == 8
