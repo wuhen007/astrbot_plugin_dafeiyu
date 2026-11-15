@@ -1,12 +1,12 @@
 {
   "output_mode": {
-    "description": "输出形态：markdown=卡片+按钮（推荐，需平台支持 Markdown）；text=纯文本",
+    "description": "输出形态：text=纯文本排版（无需QQ官方权限，默认）；markdown=Markdown卡片（需在QQ开放平台开通群聊原生Markdown权限，未开通会降级成乱排版）",
     "type": "string",
-    "default": "markdown",
-    "options": ["markdown", "text"]
+    "default": "text",
+    "options": ["text", "markdown"]
   },
   "send_image": {
-    "description": "随卡片发送实时鱼图（体型/表情/水色随状态变化，需安装 Pillow）",
+    "description": "随消息发送鱼图：优先用 fish_imgs/ 自定义形象，否则实时画鱼（需安装 Pillow）",
     "type": "bool",
     "default": true
   },

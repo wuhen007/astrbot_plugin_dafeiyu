@@ -61,6 +61,8 @@ _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 # ---------------------------------------------------------------- 常量
 _ACTION_KEYS = ("投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "排行", "排行榜",
                 "档案", "图鉴", "出栏", "再养一条", "帮助")
+# 斜杠前缀变体：QQ 官方 bot 用户习惯 /指令；若 AstrBot 唤醒前缀没配 "/"，命令匹配也能吃到
+_ALIAS_NAMES = set(_ACTION_KEYS) | {f"/{k}" for k in _ACTION_KEYS}
 _ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排行榜|档案|图鉴|出栏|再养一条|帮助)")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
@@ -88,7 +90,7 @@ def _make_yangyu_decorator():
         logger.warning("[肥鱼养成记] 未找到指令装饰器，文字指令不可用（仅按钮回调可用）")
         return lambda f: f
     try:
-        return _command_dec("养鱼", alias=set(_ACTION_KEYS))
+        return _command_dec("养鱼", alias=_ALIAS_NAMES)
     except TypeError:
         return _command_dec("养鱼")
 
@@ -99,7 +101,7 @@ class DaFeiYuPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         self.context = context
         raw = dict(config) if config is not None else {}
-        self._md_mode = raw.get("output_mode", "markdown") == "markdown"
+        self._md_mode = raw.get("output_mode", "text") == "markdown"
         self._send_image = raw.get("send_image", True)
         scale = _DIFF_SCALE.get(raw.get("difficulty", "标准"), 1.0)
         self._cfg = GameConfig()
@@ -110,6 +112,7 @@ class DaFeiYuPlugin(Star):
         data_dir = Path(raw.get("data_dir") or _default_data_dir())
         self._store = JsonStore(data_dir / "ponds")
         self._image_dir = data_dir / "images"
+        self._custom_img_dir = data_dir / "fish_imgs"   # 丢图即用：自定义鱼形象
         self._ponds = {}
         self._locks = {}
         logger.info("[肥鱼养成记] 已加载：输出=%s 画图=%s 难度=%s 存档=%s",
@@ -147,15 +150,26 @@ class DaFeiYuPlugin(Star):
                                   fallback_text=" ".join(f"[{l}]" for l, _ in chunk)))
         return rows
 
+    def _pick_image(self, session: str, pond: Pond) -> str:
+        """自定义鱼图目录（fish_imgs/）优先随机取一张；否则实时画鱼。"""
+        try:
+            if self._custom_img_dir.is_dir():
+                imgs = [p for p in self._custom_img_dir.iterdir()
+                        if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp")]
+                if imgs:
+                    return str(random.choice(imgs))
+        except Exception as e:
+            logger.warning(f"[肥鱼养成记] 自定义鱼图读取失败，改用实时画鱼：{e}")
+        h = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
+        return render_fish_png(pond.state, str(self._image_dir / f"{h}.png"),
+                               config=pond.cfg)
+
     def _build_result(self, event, pond, result):
         text = render_markdown(result) if self._md_mode else render_plain(result)
         chain = []
         if self._send_image and Image is not None:
             try:
-                h = hashlib.md5(event.unified_msg_origin.encode("utf-8")).hexdigest()[:10]
-                img_path = render_fish_png(pond.state,
-                                           str(self._image_dir / f"{h}.png"),
-                                           config=pond.cfg)
+                img_path = self._pick_image(event.unified_msg_origin, pond)
                 chain.append(Image.fromFileSystem(img_path))
             except Exception as e:
                 logger.warning(f"[肥鱼养成记] 画鱼失败，跳过：{e}")

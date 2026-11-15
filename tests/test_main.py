@@ -238,3 +238,32 @@ def test_text_mode_forces_plain(plugin):
     results = _run(_gather(p._dispatch(ev, "逗鱼")))
     assert results[0].md is False
     assert any("逗鱼" in t for t in _plain_texts(results[0]))
+
+
+def test_slash_message_reaches_panel(plugin):
+    """斜杠写法 /养鱼 走别名进来后，解析层能落回面板。"""
+    main, p, tmp = plugin
+    ev = FakeEvent(message_str="/养鱼")
+    results = _run(_gather(p.cmd_yangyu(ev)))
+    assert any("鱼籽" in t for t in _plain_texts(results[0]))
+
+
+def test_default_mode_is_text(plugin):
+    """未配置 output_mode 时默认纯文本（QQ 官方 md 权限未开通的友好降级）。"""
+    main, p, tmp = plugin
+    p2 = main.DaFeiYuPlugin(None, main.AstrBotConfig({"data_dir": str(tmp)}))
+    assert p2._md_mode is False
+
+
+def test_custom_fish_image_folder(plugin):
+    """fish_imgs/ 里有图则随机用自定义形象，不再实时画鱼。"""
+    main, p, tmp = plugin
+    from PIL import Image as PILImage
+    img_dir = tmp / "fish_imgs"
+    img_dir.mkdir()
+    PILImage.new("RGB", (32, 32), (10, 20, 30)).save(img_dir / "a.png")
+    ev = FakeEvent()
+    results = _run(_gather(p._dispatch(ev, "养鱼")))
+    imgs = [c for c in results[0].chain if isinstance(c, main.Image)]
+    assert imgs
+    assert imgs[0].path.endswith("a.png")

@@ -50,17 +50,20 @@
 
 1. 把本仓库克隆（或下载解压）到 AstrBot 的插件目录：`data/plugins/astrbot_plugin_dafeiyu`
 2. WebUI → 插件管理 → 加载/重载本插件；依赖 `requirements.txt`（Pillow）会自动安装（或手动 `pip install Pillow`）
-3. QQ 官方 bot（`qqofficial` 平台）：
-   - **Markdown 卡片与原生按钮**需要在 QQ 开放平台为 bot 开通群聊 Markdown / 按钮权限；适配器发送失败会自动降级为纯文本
-   - 原生按钮（点击回调）需要 **AstrBot v4+**（内置 `Button/ActionRow/ButtonInteraction`）；旧版自动退化为文字指令
-4. 群里 `@机器人 /养鱼` 开玩；按钮点击由本插件直接回调处理，无需再发文字
+3. 指令：`@机器人 养鱼` 与 `@机器人 /养鱼` **都能用**（投喂/玩耍 等子指令同样支持斜杠写法）
+4. QQ 官方 bot（`qqofficial` 平台）权限现实：
+   - **默认 `text` 纯文本模式无需任何权限**，排版干净可玩
+   - **Markdown 卡片**需在 QQ 开放平台为 bot 开通群聊原生 Markdown 权限（未开通时适配器会降级成纯文本，Markdown 语法符号会原样露出，很难看）
+   - **原生按钮**（点击回调）需要 AstrBot v4+（内置 `Button/ActionRow/ButtonInteraction`）+ 平台按钮权限；旧版/无权限自动退化为文字指令
+   - 开通权限后，WebUI 配置里把 `output_mode` 改为 `markdown` 即可切换卡片
+5. **自定义鱼形象**：把任意图片（png/jpg/gif/webp）丢进存档目录下的 `fish_imgs/`（默认 `data/plugin_data/astrbot_plugin_dafeiyu/fish_imgs/`），发消息时随机取一张代替实时画鱼；目录为空或不存在则用内置画鱼
 
 ## 配置项（WebUI 可改）
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| output_mode | markdown | markdown=卡片+按钮；text=纯文本 |
-| send_image | true | 随卡片发送实时鱼图（需 Pillow） |
+| output_mode | text | text=纯文本排版（无权限要求）；markdown=卡片+按钮（需开通权限） |
+| send_image | true | 随消息发送鱼图：fish_imgs/ 自定义优先，否则实时画鱼 |
 | difficulty | 标准 | 衰减速度：休闲 0.7x / 标准 1.0x / 硬核 1.4x |
 | data_dir | （空） | 存档目录，留空自动 `data/plugin_data/astrbot_plugin_dafeiyu` |
 
