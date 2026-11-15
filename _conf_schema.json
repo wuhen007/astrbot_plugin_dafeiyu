@@ -1,0 +1,24 @@
+{
+  "output_mode": {
+    "description": "输出形态：markdown=卡片+按钮（推荐，需平台支持 Markdown）；text=纯文本",
+    "type": "string",
+    "default": "markdown",
+    "options": ["markdown", "text"]
+  },
+  "send_image": {
+    "description": "随卡片发送实时鱼图（体型/表情/水色随状态变化，需安装 Pillow）",
+    "type": "bool",
+    "default": true
+  },
+  "difficulty": {
+    "description": "难度：影响自然衰减速度（休闲 0.7x / 标准 1.0x / 硬核 1.4x）",
+    "type": "string",
+    "default": "标准",
+    "options": ["休闲", "标准", "硬核"]
+  },
+  "data_dir": {
+    "description": "存档目录；留空自动使用 data/plugin_data/astrbot_plugin_dafeiyu",
+    "type": "string",
+    "default": ""
+  }
+}
