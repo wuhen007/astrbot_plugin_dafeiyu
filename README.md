@@ -57,7 +57,10 @@
    - 默认 `output_mode=markdown`；若实际显示成带 `**` 的纯文本，是 AstrBot 适配器侧未走 md：确认 AstrBot 版本较新（含 `Button/ActionRow`），或平台配置里 `use_markdown` 开关打开
    - md 内容已按 QQ 支持的语法子集渲染（#/## 标题、**加粗**、空行分段；不用表格/代码块）
    - 原生按钮（点击回调）需要 AstrBot v4+（内置 `Button/ActionRow/ButtonInteraction`）；旧版自动退化为文字指令
-5. **自定义鱼形象**：把任意图片（png/jpg/gif/webp）丢进存档目录下的 `fish_imgs/`（默认 `data/plugin_data/astrbot_plugin_dafeiyu/fish_imgs/`），发消息时随机取一张代替实时画鱼；目录为空或不存在则用内置画鱼
+5. **鱼形象来源（三级优先）**：
+   - ① **fisharchive.cc 贴图源**（默认开启）：按指令/状态自动挑语义相近的贴图（投喂→吃饭系、逗鱼→开心系、未登记→卖萌系……），索引与图片本地缓存；素材为"蓝色大肥鱼"系贴图，[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 授权，来源于 [fisharchive.cc](https://fisharchive.cc/)（署名保留于本页）
+   - ② 存档目录下 `fish_imgs/` 自定义贴图（png/jpg/gif/webp，随机取一张）——想完全用自己的图就放这里
+   - ③ 内置 PIL 画鱼（无网络/无素材时兜底）
 
 ## 配置项（WebUI 可改）
 

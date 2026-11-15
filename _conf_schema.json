@@ -6,9 +6,19 @@
     "options": ["markdown", "text"]
   },
   "send_image": {
-    "description": "随消息发送鱼图：优先用 fish_imgs/ 自定义形象，否则实时画鱼（需安装 Pillow）",
+    "description": "随消息发送状态卡图：贴图源(fisharchive)优先，其次 fish_imgs/ 自定义贴图，最后内置画鱼（需安装 Pillow）",
     "type": "bool",
     "default": true
+  },
+  "sticker_enabled": {
+    "description": "启用 fisharchive.cc 贴图源：按指令/状态自动挑语义相近的贴图嵌入状态卡（CC BY-NC-SA，需署名）。关闭或网络不可用时回退内置画鱼",
+    "type": "bool",
+    "default": true
+  },
+  "sticker_api": {
+    "description": "贴图索引地址（fisharchive.cc/stickers/index.json），一般不用改",
+    "type": "string",
+    "default": "https://fisharchive.cc/stickers/index.json"
   },
   "difficulty": {
     "description": "难度：影响自然衰减速度（休闲 0.7x / 标准 1.0x / 硬核 1.4x）",

@@ -32,6 +32,7 @@ if str(PLUGIN_DIR) not in sys.path:
 
 from game import COMMANDS, GameConfig, JsonStore, load_or_create          # noqa: E402
 from render import render_card_png, render_markdown, render_plain         # noqa: E402
+from render import stickers as sticker_src                                # noqa: E402
 from render.textcard import delta_line                                    # noqa: E402
 
 # ---------------------------------------------------------------- 版本兼容层
@@ -201,7 +202,11 @@ class DaFeiYuPlugin(Star):
         data_dir = Path(raw.get("data_dir") or _default_data_dir())
         self._store = JsonStore(data_dir / "ponds")
         self._image_dir = data_dir / "images"
-        self._custom_img_dir = data_dir / "fish_imgs"   # 丢图即用：自定义鱼形象
+        self._custom_img_dir = data_dir / "fish_imgs"   # 丢图即用：自定义鱼形象（优先级最高）
+        self._sticker_enabled = raw.get("sticker_enabled", True)
+        self._sticker_api = raw.get("sticker_api", "https://fisharchive.cc/stickers/index.json")
+        self._sticker_dir = data_dir / "stickers"
+        self._sticker_warned = False
         self._ponds = {}
         self._locks = {}
         logger.info("[肥鱼养成记] 已加载：输出=%s 画图=%s 难度=%s 存档=%s",
@@ -219,7 +224,7 @@ class DaFeiYuPlugin(Star):
         return pond
 
     def _pick_custom_img(self):
-        """自定义鱼形象目录（fish_imgs/）里随机取一张；没有则 None。"""
+        """自定义鱼形象目录（fish_imgs/）里随机取一张；没有则 None。优先级最高。"""
         try:
             if self._custom_img_dir.is_dir():
                 imgs = [p for p in self._custom_img_dir.iterdir()
@@ -227,17 +232,59 @@ class DaFeiYuPlugin(Star):
                 if imgs:
                     return str(random.choice(imgs))
         except Exception as e:
-            logger.warning(f"[肥鱼养成记] 自定义鱼图读取失败，改用内置画鱼：{e}")
+            logger.warning(f"[肥鱼养成记] 自定义鱼图读取失败：{e}")
         return None
 
-    def _build_card_image(self, session: str, pond: Pond, result) -> str:
-        """整张状态卡画成图片：文本面板（卡片文案去按钮提示行）+ 鱼塘场景。"""
+    # 指令/状态 → 贴图站 tags 与 alt 关键词（fisharchive 实测标签体系）
+    _STICKER_MAP = {
+        "feed": (["吃饭"], ["吃", "饭", "炫", "饿"]),
+        "snack": (["吃饭", "开心"], ["吃", "零食", "海苔"]),
+        "pet": (["开心", "卖萌"], ["开心", "笑", "蹭"]),
+        "clean": (["运动"], ["水", "洗", "干净"]),
+        "play_open": (["搞笑", "卖萌"], ["玩", "圈", "泡泡"]),
+        "play": (["得意", "开心"], ["精准", "战利品", "圈"]),
+        "weigh": (["得意", "震惊"], ["胖", "体重", "称"]),
+        "cooldown": (["睡觉", "敷衍"], ["休息", "累", "困"]),
+        "graduate": (["开心", "得意"], ["开心", "庆祝", "毕业"]),
+        "runaway": (["难过", "委屈"], ["走", "离开", "哭"]),
+        "need_nick": (["卖萌"], ["你好", "报到", "初次"]),
+        "panel": (["开心", "得意"], ["开心", "游"]),
+    }
+    _STICKER_TITLE_KEY = {"投喂": "feed", "加餐": "snack", "逗鱼": "pet",
+                          "净水": "clean", "称重": "weigh", "稍等一下": "cooldown",
+                          "套圈小游戏": "play_open", "套圈": "play",
+                          "名号登记": "pet"}
+
+    def _sticker_key(self, result) -> str:
+        if result.event in ("panel", "graduated", "runaway", "need_nick"):
+            return result.event
+        return self._STICKER_TITLE_KEY.get(result.title, "panel")
+
+    def _get_sticker(self, result):
+        """按指令/状态从贴图站挑一张并下载到本地；任何失败返回 None。"""
+        try:
+            key = self._sticker_key(result)
+            tags, kws = self._STICKER_MAP.get(key, self._STICKER_MAP["panel"])
+            stickers = sticker_src.load_index(self._sticker_dir, self._sticker_api)
+            if not stickers:
+                return None
+            s = sticker_src.pick_sticker(stickers, tags, kws, random.Random())
+            if not s:
+                return None
+            return sticker_src.download_sticker(s, self._sticker_dir / "img")
+        except Exception as e:
+            if not self._sticker_warned:
+                self._sticker_warned = True
+                logger.warning(f"[肥鱼养成记] 贴图源不可用，回退内置画鱼：{e}")
+            return None
+
+    def _render_card(self, session: str, pond: Pond, result, custom_img) -> str:
+        """整张状态卡画成图片：文本面板（卡片文案去按钮提示行）+ 场景贴图。"""
         lines = [ln for ln in render_markdown(result).split("\n")
                  if not ln.startswith("[")]
-        custom = self._pick_custom_img()
         h = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
         return render_card_png(pond.state, lines, str(self._image_dir / f"{h}.png"),
-                               config=pond.cfg, custom_img=custom)
+                               config=pond.cfg, custom_img=custom_img)
 
     def _one_liner(self, result) -> str:
         """键盘消息的正文：单行摘要（面板详情在图里），压平插件改不动它。"""
@@ -318,7 +365,12 @@ class DaFeiYuPlugin(Star):
             if self._send_image and Image is not None \
                     and event.get_button_interaction() is None:
                 try:
-                    img_path = self._build_card_image(session, pond, result)
+                    # 贴图源（fisharchive）优先 → fish_imgs/ 手动贴图 → 内置画鱼
+                    custom = await asyncio.to_thread(self._get_sticker, result)
+                    if custom is None:
+                        custom = self._pick_custom_img()
+                    img_path = await asyncio.to_thread(
+                        self._render_card, session, pond, result, custom)
                     yield event.image_result(img_path)
                 except Exception as e:
                     logger.warning(f"[肥鱼养成记] 画卡失败，跳过：{e}")
