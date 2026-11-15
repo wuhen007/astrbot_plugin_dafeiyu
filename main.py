@@ -66,6 +66,9 @@ _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
 _DIFF_SCALE = {"休闲": 0.7, "标准": 1.0, "硬核": 1.4}
 
+logger.info("[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰器=%s 按钮装饰器=%s",
+            _HAS_BUTTONS, _command_dec is not None, _button_dec is not None)
+
 
 def _default_data_dir() -> Path:
     """存档目录：优先 StarTools，回退到 AstrBot 运行目录下的 data/plugin_data。"""
@@ -166,18 +169,26 @@ class DaFeiYuPlugin(Star):
         return res
 
     async def _dispatch(self, event, command: str, arg=None):
-        uid = str(event.get_sender_id() or "anon")
-        name = (event.get_sender_name() or "").strip() or "鱼友"
-        session = event.unified_msg_origin
-        lock = self._locks.setdefault(session, asyncio.Lock())
-        async with lock:
-            pond = self._get_pond(event)
-            result = pond.handle(uid, name, command, arg)
-        yield self._build_result(event, pond, result)
+        try:
+            uid = str(event.get_sender_id() or "anon")
+            name = (event.get_sender_name() or "").strip() or "鱼友"
+            session = event.unified_msg_origin
+            lock = self._locks.setdefault(session, asyncio.Lock())
+            async with lock:
+                pond = self._get_pond(event)
+                result = pond.handle(uid, name, command, arg)
+            yield self._build_result(event, pond, result)
+        except Exception as e:
+            logger.exception("[肥鱼养成记] 处理指令 %r 失败", command)
+            try:
+                yield event.plain_result(f"[肥鱼养成记] 内部错误：{type(e).__name__}: {e}")
+            except Exception:
+                pass
 
     async def _yangyu(self, event):
         """「养鱼」及全部别名指令：从原文里解析子动作（兼容各种唤醒前缀）。"""
         text = event.message_str or ""
+        logger.info("[肥鱼养成记] 收到指令 message_str=%r", text)
         sub, arg = "养鱼", None
         m = _SHELL_RE.search(text)
         act = _ACTION_RE.search(text)
@@ -202,6 +213,7 @@ class DaFeiYuPlugin(Star):
             if not aid.startswith(_BTN_PREFIX):
                 return
             data = inter.data if isinstance(inter.data, str) else ""
+            logger.info("[肥鱼养成记] 按钮点击 aid=%r data=%r", aid, data)
             parts = data.split()
             if not parts:
                 return
