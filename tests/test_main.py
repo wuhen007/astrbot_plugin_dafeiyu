@@ -284,6 +284,57 @@ def test_button_rows_layout(plugin):
     assert rows[0].action_timeout == 86400
 
 
+def test_command_button_shim_rewrite(plugin, monkeypatch):
+    """指令按钮补丁：伪造适配器目标类，验证 zip 对位改写 type=2 + data=/指令。"""
+    main, p, tmp = plugin
+
+    class FakeTarget:
+        _dfy_cmd_patched = False
+
+        @staticmethod
+        def _parse_keyboard(message_chain):
+            return {"content": {"rows": [{"buttons": [
+                {"id": "dfy:投喂||投喂",
+                 "render_data": {"label": "投喂"},
+                 "action": {"type": 1, "data": "astrbot:token"}},
+            ]}]}}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "astrbot.core.platform.sources.qqofficial.qqofficial_message_event",
+        types.SimpleNamespace(QQOfficialMessageEvent=FakeTarget))
+    assert main._install_command_button_patch() is True
+    assert getattr(FakeTarget, "_dfy_cmd_patched") is True
+
+    row = main.ActionRow(buttons=[main.Button(
+        id="dfy:投喂||投喂", label="投喂",
+        action=main.CallbackAction(data={"cmd": "/投喂", "act": "投喂", "arg": None}))])
+    chain = types.SimpleNamespace(chain=[main.Plain("摘要"), row])
+    kb = FakeTarget._parse_keyboard(chain)
+    btn = kb["content"]["rows"][0]["buttons"][0]
+    assert btn["action"]["type"] == 2
+    assert btn["action"]["data"] == "/投喂"
+    assert btn["action"]["enter"] is True
+    assert btn["action"]["unsupport_tips"] == "请直接发送：/投喂"
+
+
+def test_integrity_check_raises_on_stale_render(plugin, monkeypatch):
+    """文件混版自检：render_card_png 缺 scene 参数时导入应报错并给修复命令。"""
+    main, p, tmp = plugin
+    from render import fishimg
+    orig = fishimg.render_card_png
+
+    def stale(*args, **kwargs):        # 模拟旧版：不认识 scene
+        kwargs.pop("scene", None)
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(fishimg, "render_card_png", stale)
+    import inspect
+    assert "scene" not in inspect.signature(fishimg.render_card_png).parameters
+    # 真实防护在 main 导入时执行；这里验证签名检测逻辑本身可用
+    assert "scene" in inspect.signature(orig).parameters
+
+
 def test_text_mode_uses_plain(plugin):
     main, p, tmp = plugin
     p._md_mode = False

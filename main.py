@@ -34,6 +34,16 @@ from render import (                                                      # noqa
 from render import stickers as sticker_src                                # noqa: E402
 from render.textcard import delta_line                                    # noqa: E402
 
+# 文件完整性自检：混入旧版文件（半更新）时立刻报错并给出修复命令，
+# 不允许"静默半残"运行。
+import inspect as _inspect                                                # noqa: E402
+
+if "scene" not in _inspect.signature(render_card_png).parameters:
+    raise RuntimeError(
+        "[肥鱼养成记] 插件文件不完整（检测到旧版 render/fishimg.py）。"
+        "请在本插件目录执行：git fetch && git reset --hard origin/main && git clean -fdx "
+        "然后重载插件。不要使用 WebUI 的「更新」按钮（会半更新）。")
+
 # ---------------------------------------------------------------- 版本兼容层
 _button_dec = None
 try:
@@ -135,6 +145,7 @@ def _install_command_button_patch() -> bool:
             return payload
         rows = [c for c in message_chain.chain
                 if isinstance(c, ActionRow) and c.buttons]
+        rewritten = 0
         for row_payload, row in zip(payload["content"].get("rows", []), rows):
             for btn_payload, btn in zip(row_payload.get("buttons", []), row.buttons):
                 data = getattr(btn.action, "data", None)
@@ -147,6 +158,9 @@ def _install_command_button_patch() -> bool:
                         "enter": True,
                         "unsupport_tips": f"请直接发送：{cmd}",
                     }
+                    rewritten += 1
+        logger.info(f"[肥鱼养成记][shim] 键盘行数={len(payload['content'].get('rows', []))} "
+                    f"指令按钮改写={rewritten}")
         return payload
 
     try:
