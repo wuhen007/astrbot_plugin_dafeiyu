@@ -77,9 +77,9 @@ def test_markdown_panel():
     pond = make_pond()
     r = pond.handle("u1", "小明", "养鱼")
     md = render_markdown(r)
-    assert md.startswith("# 🐟")
-    assert "**饱腹**" in md and "**成长**" in md
-    assert "\n\n" in md          # QQ md 单 \n 不换行，分段用空行
+    assert md.startswith("【🐟")
+    assert "饱腹" in md and "成长" in md
+    assert "\n" in md            # 多行文本；main.md_text 负责行尾双空格与加粗
 
 
 def test_settlement_plain():
@@ -92,4 +92,4 @@ def test_settlement_plain():
     t = render_plain(r)
     assert "出栏大典" in t and "══════" in t
     assert "评级 A" in t and "海苔片 +12" in t
-    assert render_markdown(r).startswith("# 🎉")
+    assert render_markdown(r).startswith("【🎉")

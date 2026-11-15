@@ -79,24 +79,24 @@ def render_plain(result) -> str:
 
 
 # ---------------------------------------------------------------- QQ markdown
-# QQ 官方 md 语法子集（2026-04 起群/单聊全量开放）：支持 #/## 标题、**加粗**、
-# 链接、图片、列表、> 引用；单个 \n 不换行 —— 分段用空行（\n\n）最稳。
+# QQ 原生 md 语法子集：单 \n 不换行（渲染层由 main.md_text 行尾补两空格强制换行，
+# 【】整行自动加粗），故这里只产出普通多行文本，不用 # 标题/表格/代码块。
 def _md_panel_lines(result) -> List[str]:
     d = result.data
     flavor = result.lines[0] if result.lines else ""
-    stats = "　".join(f"**{label}** {bar(d[key], width=6)} {d[key]}"
+    stats = "　".join(f"{label} {bar(d[key], width=6)} {d[key]}"
                       for label, key in _STAT_KEYS)
     if d.get("exp_need"):
-        growth = (f"**成长** Lv.{d['level']} {d['stage']} · 经验 {d['exp_cur']}/{d['exp_need']} "
-                  f"{bar(d['exp_cur'], width=6, max_value=d['exp_need'])}")
+        growth = f"成长 Lv.{d['level']} · 经验 {d['exp_cur']}/{d['exp_need']} " \
+                 f"{bar(d['exp_cur'], width=6, max_value=d['exp_need'])}"
     else:
-        growth = f"**成长** Lv.{d['level']} {d['stage']} · 已满阶"
+        growth = f"成长 Lv.{d['level']} · 已满阶"
     mw = d.get("max_weight", 100.0)
-    pond = (f"**体重** {bar(d['weight'], width=6, max_value=mw)} {d['weight']}/{mw} · "
-            f"**鱼塘** Lv.{d['pond_level']} · 全群互动 {d['pond_exp_cur']}/{d['pond_exp_need']}")
+    pond = (f"体重 {bar(d['weight'], width=6, max_value=mw)} {d['weight']}/{mw} · "
+            f"鱼塘 Lv.{d['pond_level']}（全群互动 {d['pond_exp_cur']}/{d['pond_exp_need']}）")
     lines = [
-        f"# 🐟 {d['name']} · {d['stage']}",
-        f"**{d['period']}** · {flavor}",
+        f"【🐟 {d['name']} · {d['stage']}】",
+        f"{d['period']} · {flavor}",
         stats,
         growth,
         pond,
@@ -115,11 +115,11 @@ def render_markdown(result) -> str:
     if result.event == "panel":
         body = _md_panel_lines(result)
     elif result.event in ("graduated", "runaway"):
-        body = [f"# 🎉 {result.title}", *result.lines, buttons_line(result)]
+        body = [f"【🎉 {result.title}】", *result.lines, buttons_line(result)]
     else:
-        body = [f"# {result.title}", *result.lines]
+        body = [f"【{result.title}】", *result.lines]
         dl = delta_line(result.deltas)
         if dl:
-            body.append(f"**变化**：{dl}")
+            body.append(f"变化：{dl}")
         body.append(buttons_line(result))
-    return "\n\n".join(body)
+    return "\n".join(body)

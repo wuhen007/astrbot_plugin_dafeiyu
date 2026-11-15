@@ -1,4 +1,8 @@
-"""main.py 接线冒烟测试：stub 掉 astrbot 框架后导入，模拟指令与按钮点击。"""
+"""main.py 接线冒烟测试：stub 掉 astrbot 框架后导入，模拟指令与按钮点击。
+
+v1.0.4 起发送结构 = 两条消息：①鱼图（image_result；按钮交互事件不发图）
+②「文本 + 键盘」或纯文本。
+"""
 import asyncio
 import importlib
 import json
@@ -11,12 +15,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+PLAIN_CLS = None    # 由 stub 注入
+IMAGE_CLS = None
 
-# ---------------------------------------------------------------- stub 框架
+
 class FakeResult:
-    def __init__(self, chain):
+    def __init__(self, chain, image=False):
         self.chain = chain
         self.md = None
+        self.image = image
 
     def use_markdown(self, v):
         self.md = v
@@ -46,8 +53,15 @@ class FakeEvent:
     def chain_result(self, chain):
         return FakeResult(chain)
 
+    def plain_result(self, text):
+        return FakeResult([PLAIN_CLS(text)])
+
+    def image_result(self, path):
+        return FakeResult([IMAGE_CLS(path)], image=True)
+
 
 def _stub_astrbot(monkeypatch):
+    global PLAIN_CLS, IMAGE_CLS
     astrbot = types.ModuleType("astrbot")
     api = types.ModuleType("astrbot.api")
     event_pkg = types.ModuleType("astrbot.api.event")
@@ -87,19 +101,21 @@ def _stub_astrbot(monkeypatch):
 
     class Button:
         # 模拟 v4.29.x：CallbackAction 是 Button 的内部类，不顶层导出
-        def __init__(self, id=None, label=None, action=None, **kwargs):
-            self.id, self.label, self.action = id, label, action
+        def __init__(self, id=None, label=None, action=None, style=None, **kwargs):
+            self.id, self.label, self.action, self.style = id, label, action, style
 
         class CallbackAction:
             def __init__(self, data=None, **kwargs):
                 self.data = data
 
     class ActionRow:
-        def __init__(self, buttons=None, fallback_text=None, **kwargs):
+        def __init__(self, buttons=None, fallback_text=None, action_timeout=None, **kwargs):
             self.buttons = buttons or []
             self.fallback_text = fallback_text
+            self.action_timeout = action_timeout
 
     mc.Plain, mc.Image, mc.Button, mc.ActionRow = Plain, Image, Button, ActionRow
+    PLAIN_CLS, IMAGE_CLS = Plain, Image
 
     def command(command_name=None, sub_command=None, alias=None, **kwargs):
         def deco(func):
@@ -149,8 +165,18 @@ async def _gather(agen):
     return [r async for r in agen]
 
 
-def _plain_texts(result):
-    return [c.text for c in result.chain if isinstance(c, __import__("main").Plain)]
+def _texts(result):
+    return [c.text for c in result.chain if isinstance(c, PLAIN_CLS)]
+
+
+def _rows(result, main):
+    return [c for c in result.chain if isinstance(c, main.ActionRow)]
+
+
+def _saved_state(tmp_path):
+    files = list((tmp_path / "ponds").glob("*.json"))
+    assert files, "应有存档文件"
+    return json.loads(files[0].read_text("utf-8"))
 
 
 # ---------------------------------------------------------------- 测试
@@ -159,54 +185,47 @@ def test_load_creates_data_dir(plugin):
     assert (tmp / "ponds").is_dir()
 
 
-def test_feed_via_dispatch(plugin):
+def test_feed_two_messages_image_then_kb(plugin):
     main, p, tmp = plugin
     ev = FakeEvent()
     results = _run(_gather(p._dispatch(ev, "投喂")))
-    assert len(results) == 1
-    assert results[0].md is True
-    texts = _plain_texts(results[0])
-    assert any("投喂" in t for t in texts)
-    kinds = [type(c).__name__ for c in results[0].chain]
-    assert "Image" in kinds and "ActionRow" in kinds
-    # 存档自动落盘
-    files = list((tmp / "ponds").glob("*.json"))
-    assert files
-    state = json.loads(files[0].read_text("utf-8"))
-    assert state["fish"]["exp"] == 8
+    assert len(results) == 2                     # ① 图 ② 文本+键盘
+    assert results[0].image is True
+    kb = results[1]
+    assert kb.md is True                         # use_markdown(True)
+    assert any("投喂" in t for t in _texts(kb))
+    rows = _rows(kb, main)
+    assert rows and len(rows[0].buttons) == 3
+    assert _saved_state(tmp)["fish"]["exp"] == 8
 
 
-def test_button_click_routes_to_engine(plugin):
+def test_button_click_routes_and_skips_image(plugin):
     main, p, tmp = plugin
-    inter = types.SimpleNamespace(action_id="dfy:投喂", data="投喂")
+    inter = types.SimpleNamespace(action_id="dfy:投喂||投喂",
+                                  data={"act": "投喂", "arg": None})
     ev = FakeEvent(interaction=inter)
     results = _run(_gather(p.on_button(ev)))
-    assert results
-    assert any("投喂" in t for t in _plain_texts(results[0]))
-    files = list((tmp / "ponds").glob("*.json"))
-    assert json.loads(files[0].read_text("utf-8"))["fish"]["exp"] == 8
+    assert len(results) == 1                     # 交互事件不发图
+    assert results[0].image is False
+    assert any("投喂" in t for t in _texts(results[0]))
+    assert _saved_state(tmp)["fish"]["exp"] == 8
 
 
 def test_button_play_pick(plugin):
     main, p, tmp = plugin
-    p._dispatch  # noqa: B018
-    ev_open = FakeEvent()
-    _run(_gather(p._dispatch(ev_open, "玩耍")))
-    files = list((tmp / "ponds").glob("*.json"))
-    state = json.loads(files[0].read_text("utf-8"))
-    hidden = state["pending_play"]["hidden"]
-    inter = types.SimpleNamespace(action_id=f"dfy:玩耍 {hidden + 1}", data=f"玩耍 {hidden + 1}")
-    ev = FakeEvent(interaction=inter)
-    results = _run(_gather(p.on_button(ev)))
-    texts = _plain_texts(results[0])
-    assert any("体重 +3" in t for t in texts)
+    _run(_gather(p._dispatch(FakeEvent(), "玩耍")))
+    hidden = _saved_state(tmp)["pending_play"]["hidden"]
+    inter = types.SimpleNamespace(
+        action_id=f"dfy:玩耍|{hidden + 1}|泡泡",
+        data={"act": "玩耍", "arg": str(hidden + 1)})
+    results = _run(_gather(p.on_button(FakeEvent(interaction=inter))))
+    assert any("体重 +3" in t for t in _texts(results[-1]))
 
 
 def test_button_foreign_ignored(plugin):
     main, p, tmp = plugin
-    inter = types.SimpleNamespace(action_id="other:do", data="x")
-    ev = FakeEvent(interaction=inter)
-    results = _run(_gather(p.on_button(ev)))
+    inter = types.SimpleNamespace(action_id="other:do", data={"act": "x"})
+    results = _run(_gather(p.on_button(FakeEvent(interaction=inter))))
     assert results == []
 
 
@@ -214,56 +233,54 @@ def test_yangyu_routes_shell_pick(plugin):
     main, p, tmp = plugin
     ev = FakeEvent(message_str="/养鱼 玩耍")
     results = _run(_gather(p.cmd_yangyu(ev)))
-    assert any("套圈" in t for t in _plain_texts(results[0]))
-    files = list((tmp / "ponds").glob("*.json"))
-    state = json.loads(files[0].read_text("utf-8"))
-    assert state["pending_play"] is not None
+    assert any("套圈" in t for t in _texts(results[-1]))
+    assert _saved_state(tmp)["pending_play"] is not None
 
 
 def test_button_rows_layout(plugin):
     main, p, tmp = plugin
-    ev = FakeEvent()
-    results = _run(_gather(p._dispatch(ev, "养鱼")))
-    rows = [c for c in results[0].chain if isinstance(c, main.ActionRow)]
+    results = _run(_gather(p._dispatch(FakeEvent(), "养鱼")))
+    rows = _rows(results[1], main)
     assert rows
-    assert [b.label for b in rows[0].buttons] == ["投喂", "加餐", "逗鱼"]
-    btn = rows[0].buttons[0]
-    assert btn.id == "dfy:投喂" and btn.action.data == "投喂"
+    first = rows[0].buttons
+    assert [b.label for b in first] == ["投喂", "加餐", "逗鱼"]
+    b0 = first[0]
+    assert b0.id == "dfy:投喂||投喂"
+    assert b0.action.data == {"act": "投喂", "arg": None}
+    assert rows[0].action_timeout == 600
 
 
-def test_text_mode_forces_plain(plugin):
+def test_text_mode_uses_plain(plugin):
     main, p, tmp = plugin
     p._md_mode = False
-    ev = FakeEvent()
-    results = _run(_gather(p._dispatch(ev, "逗鱼")))
-    assert results[0].md is False
-    assert any("逗鱼" in t for t in _plain_texts(results[0]))
-
-
-def test_slash_message_reaches_panel(plugin):
-    """斜杠写法 /养鱼 走别名进来后，解析层能落回面板。"""
-    main, p, tmp = plugin
-    ev = FakeEvent(message_str="/养鱼")
-    results = _run(_gather(p.cmd_yangyu(ev)))
-    assert any("鱼籽" in t for t in _plain_texts(results[0]))
+    results = _run(_gather(p._dispatch(FakeEvent(), "逗鱼")))
+    kb = results[1]
+    assert kb.md is None                         # plain_result 未走 use_markdown
+    assert any("逗鱼" in t for t in _texts(kb))
+    assert _rows(kb, main) == []                 # 纯文本模式不带键盘
 
 
 def test_default_mode_is_markdown(plugin):
-    """未配置 output_mode 时默认 markdown（QQ 官方群/单聊 md 已全量开放）。"""
+    """未配置 output_mode 时默认 markdown。"""
     main, p, tmp = plugin
     p2 = main.DaFeiYuPlugin(None, main.AstrBotConfig({"data_dir": str(tmp)}))
     assert p2._md_mode is True
 
 
+def test_slash_message_reaches_panel(plugin):
+    main, p, tmp = plugin
+    ev = FakeEvent(message_str="/养鱼")
+    results = _run(_gather(p.cmd_yangyu(ev)))
+    assert any("鱼籽" in t for t in _texts(results[-1]))
+
+
 def test_custom_fish_image_folder(plugin):
-    """fish_imgs/ 里有图则随机用自定义形象，不再实时画鱼。"""
     main, p, tmp = plugin
     from PIL import Image as PILImage
     img_dir = tmp / "fish_imgs"
     img_dir.mkdir()
     PILImage.new("RGB", (32, 32), (10, 20, 30)).save(img_dir / "a.png")
-    ev = FakeEvent()
-    results = _run(_gather(p._dispatch(ev, "养鱼")))
-    imgs = [c for c in results[0].chain if isinstance(c, main.Image)]
+    results = _run(_gather(p._dispatch(FakeEvent(), "养鱼")))
+    imgs = [c for c in results[0].chain if isinstance(c, IMAGE_CLS)]
     assert imgs
     assert imgs[0].path.endswith("a.png")

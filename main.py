@@ -1,10 +1,15 @@
 """AstrBot 插件入口：《肥鱼养成记》。
 
-- 指令：养鱼（别名：投喂/加餐/逗鱼/净水/玩耍/称重/排行/档案/出栏/再养一条/帮助）
-- 输出：Markdown 卡片 + 实时鱼图 + 原生按钮（Button/ActionRow，AstrBot v4+）；
-  旧版无按钮组件时自动降级为文字指令（卡片文案自带 [按钮] 提示行）。
-- 按钮点击经 ButtonInteraction 事件回调，路由到同一套引擎逻辑。
-- 并发：同一会话用 asyncio.Lock 串行；存档经 JsonStore 每次操作后自动落盘。
+发送模式（与 zhutian ui_kit 同款，在本机 bot 实测可用）：
+- 每次动作两条消息：①鱼图（image_result；**按钮交互事件不发图**——QQ 会拒绝
+  交互事件的图片被动回复）②「文本 + 键盘」：Plain(md_text) + ActionRow(Button...)
+  + use_markdown(True)（msg_type=2 MarkdownPayload + keyboard）
+- 按钮：Button(id 唯一, label≤16, Button.CallbackAction(data=dict), style)；
+  键盘 ≤5 行×每行 5 钮；ActionRow 自带 fallback_text（按钮过期提示文字指令），
+  action_timeout=600s
+- 无按钮组件（旧版 AstrBot）→ 整体退化为纯文本（msg_type=0，\n 原生换行）
+- 指令：养鱼（别名：投喂/加餐/逗鱼/净水/玩耍/称重/排行/档案/出栏/再养一条/帮助，
+  含 / 前缀变体）
 """
 from __future__ import annotations
 
@@ -28,7 +33,7 @@ from game import COMMANDS, GameConfig, JsonStore, load_or_create          # noqa
 from render import render_fish_png, render_markdown, render_plain         # noqa: E402
 
 # ---------------------------------------------------------------- 版本兼容层
-# v4：astrbot.api.event.filter 包提供 command / button_action 独立装饰器
+# v4.29.x：astrbot.api.event.filter 包提供 command / button_action 独立装饰器；
 # v3：astrbot.api.event 下是 FilterBuilder 实例（filter.command 可用，无按钮）
 _button_dec = None
 try:
@@ -55,7 +60,7 @@ except ImportError:
     except ImportError:
         pass
 if Button is not None:
-    # v4.29.x：CallbackAction/UrlAction 是 Button 的内部类，须 Button.CallbackAction；
+    # v4.29.x：CallbackAction/UrlAction/Style 是 Button 的内部类，须 Button.X；
     # 未来版本可能改为顶层导出，两种都试。
     try:
         from astrbot.api.message_components import CallbackAction as _CA  # noqa: E402
@@ -63,13 +68,6 @@ if Button is not None:
     except ImportError:
         CallbackAction = getattr(Button, "CallbackAction", None)
 _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
-
-# Markdown 组件：旧版 AstrBot 的 qqofficial 适配器靠它识别 md 消息；v4 master 无此类
-_MDClass = None
-try:
-    from astrbot.api.message_components import Markdown as _MDClass       # noqa: E402
-except ImportError:
-    pass
 
 # ---------------------------------------------------------------- 常量
 _ACTION_KEYS = ("投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "排行", "排行榜",
@@ -80,9 +78,30 @@ _ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排�
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
 _DIFF_SCALE = {"休闲": 0.7, "标准": 1.0, "硬核": 1.4}
+_BTN_TIMEOUT = 600          # 按钮有效期（秒），过期走 fallback_text 提示文字指令
+_LABEL_MAX = 16
+_ID_MAX = 64
 
 logger.info("[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰器=%s 按钮装饰器=%s",
             _HAS_BUTTONS, _command_dec is not None, _button_dec is not None)
+
+
+def md_text(text: str) -> str:
+    """QQ 原生 md 渲染规则：单个 \\n 不换行 → 行尾补两空格强制换行；
+    【】整行/# 开头行加粗。与 zhutian ui_kit.md_text 同款（实测可用）。"""
+    lines = str(text or "").split("\n")
+    out = []
+    for i, line in enumerate(lines):
+        s = line.rstrip()
+        if not s:
+            out.append("")
+            continue
+        if (s.startswith("【") and s.endswith("】")) or s.startswith("# "):
+            s = f"**{s}**"
+        if i < len(lines) - 1 and s:
+            s += "  "
+        out.append(s)
+    return "\n".join(out)
 
 
 def _default_data_dir() -> Path:
@@ -109,7 +128,7 @@ def _make_yangyu_decorator():
 
 
 @register("astrbot_plugin_dafeiyu", "wuhen007",
-          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", "v1.0.0")
+          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", "v1.0.4")
 class DaFeiYuPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         self.context = context
@@ -142,27 +161,6 @@ class DaFeiYuPlugin(Star):
             self._ponds[session] = pond
         return pond
 
-    def _build_rows(self, result):
-        """把引擎按钮转成 ActionRow（每行 3 个）；不支持按钮的版本返回空。"""
-        if not _HAS_BUTTONS:
-            return []
-        payloads = []
-        for b in result.buttons:
-            parts = b.command.split()
-            if parts and parts[0] == "养鱼":
-                parts = parts[1:]
-            data = " ".join(parts) if parts else "养鱼"
-            payloads.append((b.label, data))
-        rows = []
-        for i in range(0, len(payloads), 3):
-            chunk = payloads[i:i + 3]
-            buttons = [Button(id=f"{_BTN_PREFIX}{data}", label=label,
-                              action=CallbackAction(data=data))
-                       for label, data in chunk]
-            rows.append(ActionRow(buttons=buttons,
-                                  fallback_text=" ".join(f"[{l}]" for l, _ in chunk)))
-        return rows
-
     def _pick_image(self, session: str, pond: Pond) -> str:
         """自定义鱼图目录（fish_imgs/）优先随机取一张；否则实时画鱼。"""
         try:
@@ -177,27 +175,53 @@ class DaFeiYuPlugin(Star):
         return render_fish_png(pond.state, str(self._image_dir / f"{h}.png"),
                                config=pond.cfg)
 
-    def _build_result(self, event, pond, result):
-        text = render_markdown(result) if self._md_mode else render_plain(result)
-        chain = []
-        if self._send_image and Image is not None:
+    def _build_rows(self, result):
+        """引擎按钮 → ActionRow（每行 3 个）。data 用 dict {"act","arg"}；
+        id 用 act|arg|label 组合保证同键盘唯一；无按钮组件返回空。"""
+        if not _HAS_BUTTONS:
+            return []
+        style_cls = getattr(Button, "Style", None)
+        style_default = getattr(style_cls, "DEFAULT", None) if style_cls else None
+        items = []
+        for b in result.buttons:
+            parts = b.command.split()
+            if parts and parts[0] == "养鱼":
+                parts = parts[1:]
+            act = parts[0] if parts else "养鱼"
+            arg = parts[1] if len(parts) > 1 else None
+            label = str(b.label)[:_LABEL_MAX]
+            ident = f"{_BTN_PREFIX}{act}|{arg or ''}|{label}"[:_ID_MAX]
+            items.append((ident, label, {"act": act, "arg": arg}))
+        rows = []
+        for i in range(0, len(items), 3):
+            chunk = items[i:i + 3]
+            buttons = []
+            for ident, label, data in chunk:
+                kw = {"id": ident, "label": label,
+                      "action": CallbackAction(data=data)}
+                if style_default is not None:
+                    kw["style"] = style_default
+                buttons.append(Button(**kw))
+            rows.append(ActionRow(
+                buttons=buttons,
+                fallback_text=" / ".join(f"[{l}]" for _, l, _ in chunk)
+                + "（按钮失效请发送文字指令）",
+                action_timeout=_BTN_TIMEOUT))
+        return rows
+
+    def _build_result(self, event, result):
+        """「文本 + 键盘」消息：markdown 模式且有按钮组件走 msg_type=2；
+        否则纯文本（msg_type=0，\\n 原生换行）。图片不在这里发（见 _dispatch）。"""
+        rows = self._build_rows(result) if self._md_mode else []
+        if rows:
+            text = md_text(render_markdown(result))
+            res = event.chain_result([Plain(text), *rows])
             try:
-                img_path = self._pick_image(event.unified_msg_origin, pond)
-                chain.append(Image.fromFileSystem(img_path))
-            except Exception as e:
-                logger.warning(f"[肥鱼养成记] 画鱼失败，跳过：{e}")
-        if self._md_mode and _MDClass is not None:
-            # 旧版适配器：链里带 Markdown 组件才会走 md 消息
-            chain.append(_MDClass(content=text))
-        else:
-            chain.append(Plain(text))
-        chain.extend(self._build_rows(result))
-        res = event.chain_result(chain)
-        try:
-            res.use_markdown(True if self._md_mode else False)
-        except Exception:
-            pass    # 旧版 MessageChain 无 use_markdown，跟随平台默认
-        return res
+                res.use_markdown(True)
+            except Exception:
+                pass    # 极旧版 MessageChain 无 use_markdown，跟随平台默认
+            return res
+        return event.plain_result(render_plain(result))
 
     async def _dispatch(self, event, command: str, arg=None):
         try:
@@ -208,7 +232,16 @@ class DaFeiYuPlugin(Star):
             async with lock:
                 pond = self._get_pond(event)
                 result = pond.handle(uid, name, command, arg)
-            yield self._build_result(event, pond, result)
+            # ① 鱼图：按钮交互事件的图片被动回复会被 QQ 拒绝，一律跳过
+            if self._send_image and Image is not None \
+                    and event.get_button_interaction() is None:
+                try:
+                    img_path = self._pick_image(session, pond)
+                    yield event.image_result(img_path)
+                except Exception as e:
+                    logger.warning(f"[肥鱼养成记] 画鱼失败，跳过：{e}")
+            # ② 文本 + 键盘
+            yield self._build_result(event, result)
         except Exception as e:
             logger.exception("[肥鱼养成记] 处理指令 %r 失败", command)
             try:
@@ -243,13 +276,20 @@ class DaFeiYuPlugin(Star):
             aid = getattr(inter, "action_id", "") or ""
             if not aid.startswith(_BTN_PREFIX):
                 return
-            data = inter.data if isinstance(inter.data, str) else ""
-            logger.info("[肥鱼养成记] 按钮点击 aid=%r data=%r", aid, data)
-            parts = data.split()
-            if not parts:
+            data = getattr(inter, "data", None)
+            if isinstance(data, dict):
+                act = str(data.get("act") or "")
+                arg_raw = data.get("arg")
+                arg = str(arg_raw) if arg_raw is not None else None
+            elif isinstance(data, str) and data.strip():
+                parts = data.split()
+                act, arg = parts[0], (parts[1] if len(parts) > 1 else None)
+            else:
                 return
-            arg = parts[1] if len(parts) > 1 else None
-            async for res in self._dispatch(event, parts[0], arg):
+            if not act:
+                return
+            logger.info("[肥鱼养成记] 按钮点击 aid=%r act=%r arg=%r", aid, act, arg)
+            async for res in self._dispatch(event, act, arg):
                 yield res
 
     # ------------------------------------------------------------ 文字指令

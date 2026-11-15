@@ -1,5 +1,5 @@
 name: astrbot_plugin_dafeiyu
 desc: 肥鱼养成记 —— 全群共养一条大肥鱼：投喂/逗鱼/净水/套圈小游戏，养成出栏结算（S/A/B/C 评级）。纯文本/Markdown 卡片 + 实时或自定义鱼图 + 原生按钮（v4）。
-version: v1.0.3
+version: v1.0.4
 author: wuhen007
 repo: https://github.com/wuhen007/astrbot_plugin_dafeiyu
