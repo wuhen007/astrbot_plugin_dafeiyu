@@ -86,23 +86,22 @@ def render_plain(result) -> str:
 def _md_panel_lines(result) -> List[str]:
     d = result.data
     flavor = result.lines[0] if result.lines else ""
-    stats = "　".join(f"{label} {bar(d[key], width=6)} {d[key]}"
-                      for label, key in _STAT_KEYS)
-    if d.get("exp_need"):
-        growth = f"成长 Lv.{d['level']} · 经验 {d['exp_cur']}/{d['exp_need']} " \
-                 f"{bar(d['exp_cur'], width=6, max_value=d['exp_need'])}"
-    else:
-        growth = f"成长 Lv.{d['level']} · 已满阶"
     mw = d.get("max_weight", 100.0)
-    pond = (f"体重 {bar(d['weight'], width=6, max_value=mw)} {d['weight']}/{mw} · "
-            f"鱼塘 Lv.{d['pond_level']}（全群互动 {d['pond_exp_cur']}/{d['pond_exp_need']}）")
+    # 一条属性一行（QQ md 卡片里两条挤一行会折行错乱）
     lines = [
         f"【🐟 {d['name']} · {d['stage']}】",
         f"{d['period']} · {flavor}",
-        stats,
-        growth,
-        pond,
+        f"饱腹 {bar(d['satiety'])} {d['satiety']}",
+        f"心情 {bar(d['mood'])} {d['mood']}",
+        f"洁净 {bar(d['clean'])} {d['clean']}",
+        f"活力 {bar(d['energy'])} {d['energy']}",
     ]
+    if d.get("exp_need"):
+        lines.append(f"成长 Lv.{d['level']} · 经验 {d['exp_cur']}/{d['exp_need']}")
+    else:
+        lines.append(f"成长 Lv.{d['level']} · 已满阶")
+    lines.append(f"体重 {bar(d['weight'], max_value=mw)} {d['weight']}/{mw}")
+    lines.append(f"鱼塘 Lv.{d['pond_level']} · 全群互动 {d['pond_exp_cur']}/{d['pond_exp_need']}")
     if d.get("offline"):
         lines.append(f"（这段时间：{delta_line(d['offline'])}）")
     if d.get("nick"):
