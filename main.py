@@ -1,20 +1,18 @@
-"""AstrBot 插件入口：《肥鱼养成记》。
+"""AstrBot 插件壳：《肥鱼养成记》。协议转换层，玩法逻辑全在 game/ 里。
 
-发送模式（与 zhutian ui_kit 同款，在本机 bot 实测可用）：
-- 每次动作两条消息：①鱼图（image_result；**按钮交互事件不发图**——QQ 会拒绝
-  交互事件的图片被动回复）②「文本 + 键盘」：Plain(md_text) + ActionRow(Button...)
-  + use_markdown(True)（msg_type=2 MarkdownPayload + keyboard）
-- 按钮：Button(id 唯一, label≤16, Button.CallbackAction(data=dict), style)；
-  键盘 ≤5 行×每行 5 钮；ActionRow 自带 fallback_text（按钮过期提示文字指令），
-  action_timeout=600s
-- 无按钮组件（旧版 AstrBot）→ 整体退化为纯文本（msg_type=0，\n 原生换行）
-- 指令：养鱼（别名：投喂/加餐/逗鱼/净水/玩耍/称重/排行/档案/出栏/再养一条/帮助，
-  含 / 前缀变体）
+发送模式（与 zhutian/实测可用实现对齐）：
+- 「md 文本卡 + 指令按钮」：Plain(_md(text)) + ActionRow(Button...) +
+  use_markdown(True)；_md 把每行变成独立段落（QQ md 单 \n 不换行）
+- 指令按钮：对 qqofficial 适配器 _parse_keyboard 挂补丁，把回调按钮改写为
+  QQ action.type=2——点击后由客户端以用户身份发送指令文本（群里可见，
+  与原版一致），不再触发其它插件的 catch-all 回调
+- 贴图/鱼图直接发原图，不做背景合成；按钮交互事件一律不发图
+- 名号：首次照料/看面板时引导，直接回复昵称文本即可登记（_pending +
+  ALL 消息监听器），也可用「养鱼 昵称 名字」/「养鱼 跳过」
 """
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import random
 import re
@@ -31,19 +29,25 @@ if str(PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(PLUGIN_DIR))
 
 from game import COMMANDS, GameConfig, JsonStore, load_or_create          # noqa: E402
-from render import render_card_png, render_markdown, render_plain         # noqa: E402
+from render import render_fish_png, render_markdown, render_plain         # noqa: E402
 from render import stickers as sticker_src                                # noqa: E402
 from render.textcard import delta_line                                    # noqa: E402
 
 # ---------------------------------------------------------------- 版本兼容层
-# v4.29.x：astrbot.api.event.filter 包提供 command / button_action 独立装饰器；
-# v3：astrbot.api.event 下是 FilterBuilder 实例（filter.command 可用，无按钮）
 _button_dec = None
 try:
     from astrbot.api.event.filter import button_action as _button_dec     # noqa: E402
 except ImportError:
     pass
 
+_command_dec = None
+_emt_dec = None
+_EMT = None
+try:
+    from astrbot.api.event.filter import (                                # noqa: E402
+        EventMessageType as _EMT, event_message_type as _emt_dec)
+except ImportError:
+    pass
 _command_dec = None
 try:
     from astrbot.api.event.filter import command as _command_dec          # noqa: E402
@@ -63,8 +67,6 @@ except ImportError:
     except ImportError:
         pass
 if Button is not None:
-    # v4.29.x：CallbackAction/UrlAction/Style 是 Button 的内部类，须 Button.X；
-    # 未来版本可能改为顶层导出，两种都试。
     try:
         from astrbot.api.message_components import CallbackAction as _CA  # noqa: E402
         CallbackAction = _CA
@@ -75,95 +77,34 @@ _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 # ---------------------------------------------------------------- 常量
 _ACTION_KEYS = ("投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "排行", "排行榜",
                 "档案", "图鉴", "出栏", "再养一条", "昵称", "改名", "帮助")
-# 别名 = 全部子指令 + 主指令「养鱼」本身，再加 / 与 # 前缀变体
-# （QQ 官方 bot 用户习惯 /指令；AstrBot 唤醒前缀没配 "/" 时靠别名也能吃到）
 _BASE_CMDS = set(_ACTION_KEYS) | {"养鱼"}
+# 别名 = 子指令 ∪ 主指令「养鱼」∪ /、# 前缀变体（QQ 官方用户习惯 /指令）
 _ALIAS_NAMES = _BASE_CMDS | {f"{p}{k}" for k in _BASE_CMDS for p in ("/", "#")}
 _ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排行榜|档案|图鉴|出栏|再养一条|昵称|改名|帮助)")
 _NICK_ARG_RE = re.compile("(?:昵称|改名)\\s*(.+)$")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
-_DFY_CMD_PREFIX = "dfycmd:"   # 指令按钮 id 前缀（点击后 QQ 客户端代发指令文本）
+_NICK_TTL = 180.0          # 登记引导的有效期（秒），过期重新引导
+_NICK_MAX = 12
 _DIFF_SCALE = {"休闲": 0.7, "标准": 1.0, "硬核": 1.4}
-_BTN_TIMEOUT = 600          # 按钮有效期（秒），过期走 fallback_text 提示文字指令
+_BTN_TIMEOUT = 86400       # 指令按钮无过期需求，给足 24h；fallback_text 兜底
 _LABEL_MAX = 16
-_ID_MAX = 64
 
+# 免费文本回昵称时，跳过这些指令开头（避免把指令当昵称吞掉）
+_CMD_HEADS = tuple(sorted({f"{p}{k}" for k in _BASE_CMDS for p in ("", "/", "#")},
+                          key=len, reverse=True))
 
-def _dfy_upgrade_keyboard(kb):
-    """把 id 带 dfycmd: 前缀（b64 编码指令文本）的按钮升级为 QQ 指令按钮
-    （action.type=2）：点击后由 QQ 客户端以用户身份把指令发进群里——与
-    原版"点按钮=发指令"体验一致。结构不符时静默跳过，按钮自动退回回调
-    交互模式（on_button 兜底路由）。"""
-    content = (kb or {}).get("content") or {}
-    for row in content.get("rows") or []:
-        for btn in row.get("buttons") or []:
-            bid = str((btn or {}).get("id") or "")
-            if not bid.startswith(_DFY_CMD_PREFIX) or not isinstance(btn.get("action"), dict):
-                continue
-            try:
-                cmd = base64.urlsafe_b64decode(
-                    bid[len(_DFY_CMD_PREFIX):].encode("ascii")).decode("utf-8")
-            except Exception:
-                continue
-            if cmd:
-                btn["action"]["type"] = 2
-                btn["action"]["data"] = cmd if cmd.startswith("/") else f"/{cmd}"
-
-
-def _install_command_button_patch() -> bool:
-    """对 qqofficial 适配器的 _parse_keyboard 挂后处理（幂等、失败无害）。"""
-    try:
-        from astrbot.core.platform.sources.qqofficial.qqofficial_message_event import (
-            QQOfficialMessageEvent)
-    except Exception:
-        return False
-    orig = getattr(QQOfficialMessageEvent, "_parse_keyboard", None)
-    if orig is None or getattr(QQOfficialMessageEvent, "_dfy_cmd_patched", False):
-        return bool(getattr(QQOfficialMessageEvent, "_dfy_cmd_patched", False))
-
-    def patched(message_chain):
-        kb = orig(message_chain)
-        try:
-            _dfy_upgrade_keyboard(kb)
-        except Exception:
-            pass
-        return kb
-
-    try:
-        QQOfficialMessageEvent._parse_keyboard = patched
-        QQOfficialMessageEvent._dfy_cmd_patched = True
-        return True
-    except Exception:
-        return False
-
-
-logger.info("[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰器=%s 按钮装饰器=%s",
-            _HAS_BUTTONS, _command_dec is not None, _button_dec is not None)
-logger.info("[肥鱼养成记] 指令按钮补丁（点按钮=发指令）：%s",
-            "已安装" if _install_command_button_patch() else "不可用（退回回调交互按钮）")
+logger.info("[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰器=%s 按钮装饰器=%s 昵称监听=%s",
+            _HAS_BUTTONS, _command_dec is not None, _button_dec is not None,
+            _emt_dec is not None)
 
 
 def md_text(text: str) -> str:
-    """QQ 原生 md 渲染规则：单个 \\n 不换行 → 行尾补两空格强制换行；
-    【】整行/# 开头行加粗。与 zhutian ui_kit.md_text 同款（实测可用）。"""
-    lines = str(text or "").split("\n")
-    out = []
-    for i, line in enumerate(lines):
-        s = line.rstrip()
-        if not s:
-            out.append("")
-            continue
-        if (s.startswith("【") and s.endswith("】")) or s.startswith("# "):
-            s = f"**{s}**"
-        if i < len(lines) - 1 and s:
-            s += "  "
-        out.append(s)
-    return "\n".join(out)
+    """QQ 原生 md 把单换行当空格：每行非空行变成独立段落（\\n\\n 连接）。"""
+    return "\n\n".join(ln.strip() for ln in str(text or "").split("\n") if ln.strip())
 
 
 def _default_data_dir() -> Path:
-    """存档目录：优先 StarTools，回退到 AstrBot 运行目录下的 data/plugin_data。"""
     try:
         from astrbot.api.star import StarTools
         p = StarTools.get_data_dir("astrbot_plugin_dafeiyu")
@@ -172,6 +113,55 @@ def _default_data_dir() -> Path:
     except Exception:
         pass
     return Path("data") / "plugin_data" / "astrbot_plugin_dafeiyu"
+
+
+def _install_command_button_patch() -> bool:
+    """把 qqofficial 的回调按钮改写为指令按钮（action.type=2）：点击后由
+    客户端以用户身份发送 data["cmd"] 文本，群里可见、无过期提示。
+    结构不符时静默跳过，按钮退回回调交互（on_button 兜底路由）。"""
+    try:
+        from astrbot.core.platform.sources.qqofficial.qqofficial_message_event import (
+            QQOfficialMessageEvent as Target)
+    except Exception:
+        return False
+    if getattr(Target, "_dfy_cmd_patched", False):
+        return True
+    original = Target._parse_keyboard
+
+    def shim(message_chain):
+        payload = original(message_chain)
+        if not payload or "content" not in payload:
+            return payload
+        rows = [c for c in message_chain.chain
+                if isinstance(c, ActionRow) and c.buttons]
+        for row_payload, row in zip(payload["content"].get("rows", []), rows):
+            for btn_payload, btn in zip(row_payload.get("buttons", []), row.buttons):
+                data = getattr(btn.action, "data", None)
+                cmd = data.get("cmd") if isinstance(data, dict) else None
+                if cmd:
+                    btn_payload["action"] = {
+                        "type": 2,
+                        "permission": {"type": 2},
+                        "data": cmd,
+                        "enter": True,
+                        "unsupport_tips": f"请直接发送：{cmd}",
+                    }
+        return payload
+
+    try:
+        Target._parse_keyboard = staticmethod(shim)
+        Target._dfy_cmd_patched = True
+        return True
+    except Exception:
+        return False
+
+
+_patch_ok = _install_command_button_patch()
+logger.info("[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰器=%s 按钮装饰器=%s 昵称监听=%s",
+            _HAS_BUTTONS, _command_dec is not None, _button_dec is not None,
+            _emt_dec is not None)
+logger.info("[肥鱼养成记] 指令按钮补丁（点按钮=发指令）：%s",
+            "已安装" if _patch_ok else "不可用（退回回调交互按钮）")
 
 
 def _make_yangyu_decorator():
@@ -186,11 +176,16 @@ def _make_yangyu_decorator():
 
 
 @register("astrbot_plugin_dafeiyu", "wuhen007",
-          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", "v1.0.4")
+          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", "v1.1.0")
 class DaFeiYuPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         self.context = context
         raw = dict(config) if config is not None else {}
+        try:
+            if isinstance(raw.get("astrbot_plugin_dafeiyu"), dict):
+                raw = raw["astrbot_plugin_dafeiyu"]
+        except Exception:
+            pass
         self._md_mode = raw.get("output_mode", "markdown") == "markdown"
         self._send_image = raw.get("send_image", True)
         scale = _DIFF_SCALE.get(raw.get("difficulty", "标准"), 1.0)
@@ -202,16 +197,20 @@ class DaFeiYuPlugin(Star):
         data_dir = Path(raw.get("data_dir") or _default_data_dir())
         self._store = JsonStore(data_dir / "ponds")
         self._image_dir = data_dir / "images"
-        self._custom_img_dir = data_dir / "fish_imgs"   # 丢图即用：自定义鱼形象（优先级最高）
+        self._custom_img_dir = data_dir / "fish_imgs"   # 手动贴图（优先级最高）
         self._sticker_enabled = raw.get("sticker_enabled", True)
         self._sticker_api = raw.get("sticker_api", "https://fisharchive.cc/stickers/index.json")
         self._sticker_dir = data_dir / "stickers"
         self._sticker_warned = False
         self._ponds = {}
         self._locks = {}
-        logger.info("[肥鱼养成记] 已加载：输出=%s 画图=%s 难度=%s 存档=%s",
+        self._pending = {}      # (session, uid) -> 登记引导截止时刻
+        logger.info("[肥鱼养成记] 已加载：输出=%s 画图=%s 贴图=%s 难度=%s 存档=%s",
                     "markdown" if self._md_mode else "text", self._send_image,
-                    raw.get("difficulty", "标准"), data_dir)
+                    self._sticker_enabled, raw.get("difficulty", "标准"), data_dir)
+
+    async def terminate(self):
+        pass
 
     # ------------------------------------------------------------ 内部
     def _get_pond(self, event) -> Pond:
@@ -224,7 +223,7 @@ class DaFeiYuPlugin(Star):
         return pond
 
     def _pick_custom_img(self):
-        """自定义鱼形象目录（fish_imgs/）里随机取一张；没有则 None。优先级最高。"""
+        """fish_imgs/ 手动贴图随机一张（优先级最高）；没有则 None。"""
         try:
             if self._custom_img_dir.is_dir():
                 imgs = [p for p in self._custom_img_dir.iterdir()
@@ -235,7 +234,6 @@ class DaFeiYuPlugin(Star):
             logger.warning(f"[肥鱼养成记] 自定义鱼图读取失败：{e}")
         return None
 
-    # 指令/状态 → 贴图站 tags 与 alt 关键词（fisharchive 实测标签体系）
     _STICKER_MAP = {
         "feed": (["吃饭"], ["吃", "饭", "炫", "饿"]),
         "snack": (["吃饭", "开心"], ["吃", "零食", "海苔"]),
@@ -275,35 +273,20 @@ class DaFeiYuPlugin(Star):
         except Exception as e:
             if not self._sticker_warned:
                 self._sticker_warned = True
-                logger.warning(f"[肥鱼养成记] 贴图源不可用，回退内置画鱼：{e}")
+                logger.warning(f"[肥鱼养成记] 贴图源不可用，回退内置鱼图：{e}")
             return None
 
-    def _render_card(self, session: str, pond: Pond, result, custom_img) -> str:
-        """整张状态卡画成图片：文本面板（卡片文案去按钮提示行）+ 场景贴图。"""
-        lines = [ln for ln in render_markdown(result).split("\n")
-                 if not ln.startswith("[")]
+    def _fallback_fish(self, session: str, pond: Pond) -> str:
         h = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
-        return render_card_png(pond.state, lines, str(self._image_dir / f"{h}.png"),
-                               config=pond.cfg, custom_img=custom_img)
+        return render_fish_png(pond.state, str(self._image_dir / f"{h}.png"),
+                               config=pond.cfg)
 
-    def _one_liner(self, result) -> str:
-        """键盘消息的正文：单行摘要（面板详情在图里），压平插件改不动它。"""
-        if result.event == "panel":
-            d = result.data
-            return md_text(f"【🐟 {d['name']} · {d['stage']}】点按钮互动，发「帮助」看玩法")
-        if result.event in ("graduated", "runaway"):
-            s = (result.data or {}).get("summary", {})
-            return md_text(f"【{result.title}】评级 {s.get('grade', 'C')} · 详情见图")
-        first = result.lines[0] if result.lines else ""
-        base = f"【{result.title}】{first}"
-        dl = delta_line(result.deltas)
-        if dl:
-            base = f"{base} ｜ {dl}"
-        return md_text(base)
+    def _md(self, text: str) -> str:
+        return md_text(text)
 
     def _build_rows(self, result):
-        """引擎按钮 → ActionRow（每行 3 个）。data 用 dict {"act","arg"}；
-        id 用 act|arg|label 组合保证同键盘唯一；无按钮组件返回空。"""
+        """引擎按钮 → ActionRow。data 带整条指令 {"cmd": "/养鱼 投喂"}，
+        适配器补丁改写为指令按钮；无按钮组件返回空。"""
         if not _HAS_BUTTONS:
             return []
         style_cls = getattr(Button, "Style", None)
@@ -312,15 +295,15 @@ class DaFeiYuPlugin(Star):
         for b in result.buttons:
             parts = b.command.split()
             if parts and parts[0] == "养鱼":
-                parts = parts[1:]
-            act = parts[0] if parts else "养鱼"
-            arg = parts[1] if len(parts) > 1 else None
+                rest = parts[1:]
+            else:
+                rest = parts
+            cmd = "/养鱼" + (" " + " ".join(rest) if rest else "")
+            act = rest[0] if rest else "养鱼"
+            arg = rest[1] if len(rest) > 1 else None
             label = str(b.label)[:_LABEL_MAX]
-            # 指令按钮：id 携带 b64 指令文本，适配器补丁升级为 action.type=2
-            cmd = f"{act} {arg}".strip() if arg else act
-            ident = _DFY_CMD_PREFIX + base64.urlsafe_b64encode(
-                cmd.encode("utf-8")).decode("ascii")[:_ID_MAX - len(_DFY_CMD_PREFIX)]
-            items.append((ident, label, {"act": act, "arg": arg}))
+            ident = f"{_BTN_PREFIX}{act}|{arg or ''}|{label}"[:64]
+            items.append((ident, label, {"cmd": cmd, "act": act, "arg": arg}))
         rows = []
         for i in range(0, len(items), 3):
             chunk = items[i:i + 3]
@@ -339,42 +322,44 @@ class DaFeiYuPlugin(Star):
         return rows
 
     def _build_result(self, event, result):
-        """「单行摘要 + 键盘」消息：markdown 模式且有按钮组件走 msg_type=2；
-        否则纯文本全量卡片（msg_type=0，\\n 原生换行）。图片不在这里发。"""
+        """「md 文本卡 + 按钮」：markdown 模式且有按钮组件走 msg_type=2；
+        否则纯文本全量卡片（\\n 原生换行）。图片不在这里发（见 _dispatch）。"""
         rows = self._build_rows(result) if self._md_mode else []
         if rows:
-            res = event.chain_result([Plain(self._one_liner(result)), *rows])
+            res = event.chain_result([Plain(self._md(render_markdown(result))), *rows])
             try:
                 res.use_markdown(True)
             except Exception:
-                pass    # 极旧版 MessageChain 无 use_markdown，跟随平台默认
+                pass
             return res
         return event.plain_result(render_plain(result))
 
     async def _dispatch(self, event, command: str, arg=None):
         try:
             uid = str(event.get_sender_id() or "anon")
-            # 平台昵称原样传给引擎（为空时引擎会引导登记名号）
-            name = (event.get_sender_name() or "").strip()
+            name = (event.get_sender_name() or "").strip()   # 为空时引擎引导登记名号
             session = event.unified_msg_origin
             lock = self._locks.setdefault(session, asyncio.Lock())
             async with lock:
                 pond = self._get_pond(event)
                 result = pond.handle(uid, name, command, arg)
-            # ① 状态卡图：按钮交互事件的图片被动回复会被 QQ 拒绝，一律跳过
+            if result.event == "need_nick":
+                # 引导免费文本回昵称（180s 内的下一条非指令消息即登记）
+                self._pending[(session, uid)] = time.time() + _NICK_TTL
+            # ① 贴图/鱼图直接发原图（不合成背景）；交互事件不发图
             if self._send_image and Image is not None \
                     and event.get_button_interaction() is None:
                 try:
-                    # 贴图源（fisharchive）优先 → fish_imgs/ 手动贴图 → 内置画鱼
                     custom = await asyncio.to_thread(self._get_sticker, result)
                     if custom is None:
                         custom = self._pick_custom_img()
-                    img_path = await asyncio.to_thread(
-                        self._render_card, session, pond, result, custom)
-                    yield event.image_result(img_path)
+                    if custom is None:
+                        custom = await asyncio.to_thread(self._fallback_fish, session, pond)
+                    if custom:
+                        yield event.image_result(custom)
                 except Exception as e:
-                    logger.warning(f"[肥鱼养成记] 画卡失败，跳过：{e}")
-            # ② 文本 + 键盘
+                    logger.warning(f"[肥鱼养成记] 发图失败，跳过：{e}")
+            # ② md 文本卡 + 按钮
             yield self._build_result(event, result)
         except Exception as e:
             logger.exception("[肥鱼养成记] 处理指令 %r 失败", command)
@@ -400,7 +385,38 @@ class DaFeiYuPlugin(Star):
         async for res in self._dispatch(event, sub, arg):
             yield res
 
-    # ------------------------------------------------------------ 按钮回调
+    # ------------------------------------------------------------ 名号登记（免费文本）
+    if _emt_dec is not None and _EMT is not None:
+        @_emt_dec(_EMT.ALL, priority=100)
+        async def on_nickname_reply(self, event: AstrMessageEvent):
+            try:
+                cid = event.unified_msg_origin
+                uid = str(event.get_sender_id() or "")
+                deadline = self._pending.get((cid, uid))
+                if not deadline:
+                    return
+                if time.time() > deadline:
+                    self._pending.pop((cid, uid), None)
+                    return
+                text = (event.message_str or "").strip()
+                if not text or text.startswith(_CMD_HEADS):
+                    return          # 指令不吞，走正常指令管线
+                self._pending.pop((cid, uid), None)
+                try:
+                    event.stop_event()
+                except Exception:
+                    pass
+                nick = text[:_NICK_MAX]
+                async for res in self._dispatch(event, "昵称", nick):
+                    yield res
+            except Exception as e:
+                logger.exception("[肥鱼养成记] 名号登记失败")
+                try:
+                    yield event.plain_result(f"[肥鱼养成记] 内部错误：{type(e).__name__}: {e}")
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------ 按钮回调（兜底：补丁未生效时走交互）
     if _button_dec is not None:
         @_button_dec()
         async def on_button(self, event: AstrMessageEvent):
@@ -411,18 +427,25 @@ class DaFeiYuPlugin(Star):
             if inter is None:
                 return
             aid = getattr(inter, "action_id", "") or ""
-            if not aid.startswith((_BTN_PREFIX, _DFY_CMD_PREFIX)):
+            if not aid.startswith(_BTN_PREFIX):
                 return
+            # zhutian 等插件也注册了全局按钮回调，先停住事件别让它插话
+            try:
+                event.stop_event()
+            except Exception:
+                pass
             data = getattr(inter, "data", None)
-            if isinstance(data, dict):
-                act = str(data.get("act") or "")
+            act = arg = None
+            if isinstance(data, dict) and data.get("act"):
+                act = str(data["act"])
                 arg_raw = data.get("arg")
                 arg = str(arg_raw) if arg_raw is not None else None
-            elif isinstance(data, str) and data.strip():
-                parts = data.split()
-                act, arg = parts[0], (parts[1] if len(parts) > 1 else None)
-            else:
-                return
+            elif isinstance(data, dict) and data.get("cmd"):
+                parts = str(data["cmd"]).lstrip("/").split()
+                if parts and parts[0] == "养鱼":
+                    parts = parts[1:]
+                if parts:
+                    act, arg = parts[0], (parts[1] if len(parts) > 1 else None)
             if not act:
                 return
             logger.info("[肥鱼养成记] 按钮点击 aid=%r act=%r arg=%r", aid, act, arg)

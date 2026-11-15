@@ -8,9 +8,9 @@ _STAT_KEYS = (("饱腹", "satiety"), ("心情", "mood"), ("洁净", "clean"), ("
 
 def bar(value: float, width: int = 10, max_value: float = 100.0) -> str:
     if max_value <= 0:
-        return "▱" * width
+        return "░" * width
     filled = max(0, min(width, int(value / max_value * width + 0.5)))
-    return "▰" * filled + "▱" * (width - filled)
+    return "█" * filled + "░" * (width - filled)
 
 
 def _fmt(v: float) -> str:

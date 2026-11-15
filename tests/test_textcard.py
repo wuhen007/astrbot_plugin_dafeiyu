@@ -23,10 +23,10 @@ def make_pond():
 
 
 def test_bar():
-    assert bar(0) == "▱" * 10
-    assert bar(100) == "▰" * 10
-    assert bar(50) == "▰▰▰▰▰▱▱▱▱▱"
-    assert bar(80, width=6, max_value=100) == "▰▰▰▰▰▱"
+    assert bar(0) == "░" * 10
+    assert bar(100) == "█" * 10
+    assert bar(50) == "█████░░░░░"
+    assert bar(80, width=6, max_value=100) == "█████░"
 
 
 def test_fmt():

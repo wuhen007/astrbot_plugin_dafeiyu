@@ -340,14 +340,13 @@ def test_platform_name_autoregisters():
     assert r2.ok
 
 
-def test_panel_shows_nick_hint():
-    """未登记名号的用户看面板 → 带登记提示。"""
+def test_panel_nick_gate():
+    """未登记名号的用户发「养鱼」→ 面板先引导登记；登记后正常出面板。"""
     pond, _ = make_pond()
-    pond.handle("u9", "", "投喂")                # 触发引导（顺带建档）
     r = pond.handle("u9", "", "养鱼")
-    assert any("登记名号" in ln for ln in r.lines)
-    assert r.data["nick"] == ""
+    assert not r.ok and r.event == "need_nick"
+    assert any("昵称" in ln for ln in r.lines)
     pond.handle("u9", "", "昵称", "阿鱼")
     r2 = pond.handle("u9", "", "养鱼")
+    assert r2.ok and r2.event == "panel"
     assert r2.data["nick"] == "阿鱼" and r2.data["nick_set"]
-    assert not any("登记名号" in ln for ln in r2.lines)

@@ -335,6 +335,10 @@ class Pond:
         st = self.state
         if st.status == "ended":
             return self._settlement_result()
+        user = self._user(uid, name)
+        gate = self._nick_gate(user)
+        if gate is not None:
+            return gate
         fish = st.fish
         lv = growth.level_from_exp(fish.exp)
         stage = growth.stage_name(lv)
@@ -344,8 +348,6 @@ class Pond:
         keeper = self._top_keeper()
         r = ActionResult(event="panel", title=f"{fish.name} · {stage}", lines=[pflavor])
         me = self.state.users.get(uid)
-        if me is not None and not me.nick_set:
-            r.lines.append("📌 先登记名号：发「养鱼 昵称 名字」，排行里才能认出你")
         r.data = {
             "name": fish.name, "level": lv, "stage": stage,
             "exp_cur": cur, "exp_need": need,

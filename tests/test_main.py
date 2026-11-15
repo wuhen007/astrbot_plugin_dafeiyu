@@ -1,7 +1,7 @@
-"""main.py 接线冒烟测试：stub 掉 astrbot 框架后导入，模拟指令与按钮点击。
+"""main.py 接线冒烟测试：stub 掉 astrbot 框架后导入，模拟指令/按钮/昵称登记。
 
-v1.0.4 起发送结构 = 两条消息：①鱼图（image_result；按钮交互事件不发图）
-②「文本 + 键盘」或纯文本。
+v1.1.0 起发送结构 = 两条消息：①贴图/鱼图直接发原图（交互事件不发图）
+②「md 文本卡 + 指令按钮」（data 带 {"cmd": "/养鱼 X"}，适配器补丁转指令按钮）。
 """
 import asyncio
 import importlib
@@ -36,6 +36,7 @@ class FakeEvent:
         self._session, self._uid, self._name = session, uid, name
         self.message_str = message_str
         self._interaction = interaction
+        self.stopped = False
 
     @property
     def unified_msg_origin(self):
@@ -49,6 +50,9 @@ class FakeEvent:
 
     def get_button_interaction(self):
         return self._interaction
+
+    def stop_event(self):
+        self.stopped = True
 
     def chain_result(self, chain):
         return FakeResult(chain)
@@ -129,6 +133,8 @@ def _stub_astrbot(monkeypatch):
 
     filter_pkg.command = command
     filter_pkg.button_action = button_action
+    filter_pkg.event_message_type = lambda *a, **k: (lambda f: f)
+    filter_pkg.EventMessageType = types.SimpleNamespace(ALL="all")
 
     astrbot.api = api
     astrbot.api.event = event_pkg
@@ -152,6 +158,9 @@ def plugin(tmp_path, monkeypatch):
     _stub_astrbot(monkeypatch)
     sys.modules.pop("main", None)
     main = importlib.import_module("main")
+    # 贴图源置离线：测试聚焦发送结构与昵称流程，不联网
+    import render.stickers as ss
+    monkeypatch.setattr(ss, "load_index", lambda *a, **k: None)
     cfg = main.AstrBotConfig({"output_mode": "markdown", "send_image": True,
                               "difficulty": "标准", "data_dir": str(tmp_path)})
     return main, main.DaFeiYuPlugin(None, cfg), tmp_path
@@ -189,39 +198,69 @@ def test_feed_two_messages_image_then_kb(plugin):
     main, p, tmp = plugin
     ev = FakeEvent()
     results = _run(_gather(p._dispatch(ev, "投喂")))
-    assert len(results) == 2                     # ① 图 ② 文本+键盘
+    assert len(results) == 2                     # ① 鱼图直发 ② md 卡+按钮
     assert results[0].image is True
     kb = results[1]
-    assert kb.md is True                         # use_markdown(True)
-    assert any("投喂" in t for t in _texts(kb))
+    assert kb.md is True
+    texts = "\n".join(_texts(kb))
+    assert "【投喂】" in texts and "饱腹" in texts
     rows = _rows(kb, main)
-    assert rows and len(rows[0].buttons) == 3
+    assert rows and rows[0].action_timeout == 86400
     assert _saved_state(tmp)["fish"]["exp"] == 8
+
+
+def test_nickname_free_text_flow(plugin):
+    """首次照料 → 引导；直接回复昵称文本 → 登记；之后放行。"""
+    main, p, tmp = plugin
+    ev1 = FakeEvent(name="", message_str="投喂")
+    results = _run(_gather(p._dispatch(ev1, "投喂")))
+    kb = results[-1]
+    assert any("昵称" in t for t in _texts(kb))  # 引导登记
+    assert ("test:GroupMessage:1", "u1") in p._pending
+
+    ev2 = FakeEvent(name="", message_str="阿鱼")  # 免费文本回复昵称
+    results2 = _run(_gather(p.on_nickname_reply(ev2)))
+    assert ev2.stopped                           # 停住事件，别让其它插件/LLM 插话
+    assert results2 and any("阿鱼" in t for t in _texts(results2[-1]))
+
+    ev3 = FakeEvent(name="", message_str="投喂")
+    results3 = _run(_gather(p._dispatch(ev3, "投喂")))
+    assert any("饱腹" in t for t in _texts(results3[-1]))
+    st = _saved_state(tmp)
+    assert st["users"]["u1"]["nick_set"] is True
+    assert st["users"]["u1"]["display_name"] == "阿鱼"
+
+
+def test_nickname_listener_ignores_commands(plugin):
+    main, p, tmp = plugin
+    _run(_gather(p._dispatch(FakeEvent(name="", message_str="投喂"), "投喂")))
+    # 指令开头不吞：发「养鱼」应走指令管线而不是被当昵称
+    ev = FakeEvent(name="", message_str="养鱼")
+    results = _run(_gather(p.on_nickname_reply(ev)))
+    assert results == []
+    assert ("test:GroupMessage:1", "u1") in p._pending   # 引导仍挂起
 
 
 def test_button_click_routes_and_skips_image(plugin):
     main, p, tmp = plugin
-    inter = types.SimpleNamespace(action_id="dfycmd:" + main.base64.urlsafe_b64encode(
-        "养鱼 投喂".encode()).decode(),
-        data={"act": "投喂", "arg": None})
+    inter = types.SimpleNamespace(action_id="dfy:投喂||投喂",
+                                  data={"cmd": "/养鱼 投喂", "act": "投喂", "arg": None})
     ev = FakeEvent(interaction=inter)
     results = _run(_gather(p.on_button(ev)))
     assert len(results) == 1                     # 交互事件不发图
     assert results[0].image is False
     assert any("投喂" in t for t in _texts(results[0]))
+    assert ev.stopped                            # 停事件，防 zhutian 插话
     assert _saved_state(tmp)["fish"]["exp"] == 8
 
 
-def test_button_play_pick(plugin):
+def test_button_cmd_only_data(plugin):
+    """只有 {"cmd": ...} 的数据也能路由（兜底）。"""
     main, p, tmp = plugin
-    _run(_gather(p._dispatch(FakeEvent(), "玩耍")))
-    hidden = _saved_state(tmp)["pending_play"]["hidden"]
-    inter = types.SimpleNamespace(
-        action_id="dfycmd:" + main.base64.urlsafe_b64encode(
-            f"养鱼 玩耍 {hidden + 1}".encode()).decode(),
-        data={"act": "玩耍", "arg": str(hidden + 1)})
-    results = _run(_gather(p.on_button(FakeEvent(interaction=inter))))
-    assert any("体重 +3" in t for t in _texts(results[-1]))
+    inter = types.SimpleNamespace(action_id="dfy:x", data={"cmd": "/养鱼 玩耍"})
+    ev = FakeEvent(interaction=inter)
+    results = _run(_gather(p.on_button(ev)))
+    assert any("套圈" in t for t in _texts(results[-1]))
 
 
 def test_button_foreign_ignored(plugin):
@@ -231,59 +270,31 @@ def test_button_foreign_ignored(plugin):
     assert results == []
 
 
-def test_yangyu_routes_shell_pick(plugin):
-    main, p, tmp = plugin
-    ev = FakeEvent(message_str="/养鱼 玩耍")
-    results = _run(_gather(p.cmd_yangyu(ev)))
-    assert any("套圈" in t for t in _texts(results[-1]))
-    assert _saved_state(tmp)["pending_play"] is not None
-
-
 def test_button_rows_layout(plugin):
     main, p, tmp = plugin
     results = _run(_gather(p._dispatch(FakeEvent(), "养鱼")))
-    rows = _rows(results[1], main)
+    rows = _rows(results[-1], main)
     assert rows
     first = rows[0].buttons
     assert [b.label for b in first] == ["投喂", "加餐", "逗鱼"]
     b0 = first[0]
-    assert b0.id.startswith("dfycmd:")
-    cmd = main.base64.urlsafe_b64decode(
-        b0.id[len("dfycmd:"):].encode()).decode("utf-8")
-    assert cmd == "投喂"
-    assert b0.action.data == {"act": "投喂", "arg": None}
-    assert rows[0].action_timeout == 600
-
-
-def test_dfy_upgrade_keyboard_marks_command_buttons(plugin):
-    """指令按钮补丁：dfycmd: 前缀按钮 → action.type=2 + data=/指令。"""
-    main, _, _ = plugin
-    b64 = main.base64.urlsafe_b64encode("投喂".encode()).decode()
-    kb = {"content": {"rows": [{"buttons": [
-        {"id": f"dfycmd:{b64}", "render_data": {"label": "投喂"},
-         "action": {"type": 1, "data": "astrbot:token"}},
-        {"id": "other:btn", "render_data": {"label": "别的"},
-         "action": {"type": 1, "data": "astrbot:token2"}},
-    ]}]}}
-    main._dfy_upgrade_keyboard(kb)
-    btns = kb["content"]["rows"][0]["buttons"]
-    assert btns[0]["action"]["type"] == 2
-    assert btns[0]["action"]["data"] == "/投喂"
-    assert btns[1]["action"]["type"] == 1        # 别家按钮不动
+    assert b0.id.startswith("dfy:")
+    assert b0.action.data["cmd"] == "/养鱼 投喂"
+    assert b0.action.data["act"] == "投喂"
+    assert rows[0].action_timeout == 86400
 
 
 def test_text_mode_uses_plain(plugin):
     main, p, tmp = plugin
     p._md_mode = False
     results = _run(_gather(p._dispatch(FakeEvent(), "逗鱼")))
-    kb = results[1]
+    kb = results[-1]
     assert kb.md is None                         # plain_result 未走 use_markdown
-    assert any("逗鱼" in t for t in _texts(kb))
     assert _rows(kb, main) == []                 # 纯文本模式不带键盘
+    assert any("逗鱼" in t for t in _texts(kb))
 
 
 def test_default_mode_is_markdown(plugin):
-    """未配置 output_mode 时默认 markdown。"""
     main, p, tmp = plugin
     p2 = main.DaFeiYuPlugin(None, main.AstrBotConfig({"data_dir": str(tmp)}))
     assert p2._md_mode is True
@@ -291,20 +302,15 @@ def test_default_mode_is_markdown(plugin):
 
 def test_slash_message_reaches_panel(plugin):
     main, p, tmp = plugin
-    ev = FakeEvent(message_str="/养鱼")
+    ev = FakeEvent(name="小明", message_str="/养鱼")
     results = _run(_gather(p.cmd_yangyu(ev)))
     assert any("鱼籽" in t for t in _texts(results[-1]))
 
 
-def test_custom_fish_image_folder(plugin):
-    """fish_imgs/ 有贴图时嵌入状态卡（卡图仍是生成的 png）。"""
+def test_panel_nick_gate(plugin):
     main, p, tmp = plugin
-    from PIL import Image as PILImage
-    img_dir = tmp / "fish_imgs"
-    img_dir.mkdir()
-    PILImage.new("RGBA", (64, 48), (10, 20, 30, 255)).save(img_dir / "a.png")
-    results = _run(_gather(p._dispatch(FakeEvent(), "养鱼")))
-    imgs = [c for c in results[0].chain if isinstance(c, IMAGE_CLS)]
-    assert imgs
-    card = Path(imgs[0].path)
-    assert card.exists() and card.suffix == ".png"
+    ev = FakeEvent(name="")                      # 无平台昵称
+    results = _run(_gather(p._dispatch(ev, "养鱼")))
+    kb = results[-1]
+    assert any("昵称" in t for t in _texts(kb))  # 面板先问名字
+    assert p._pending[("test:GroupMessage:1", "u1")] > 0
