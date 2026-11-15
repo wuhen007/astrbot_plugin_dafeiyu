@@ -74,8 +74,10 @@ _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 # ---------------------------------------------------------------- 常量
 _ACTION_KEYS = ("投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "排行", "排行榜",
                 "档案", "图鉴", "出栏", "再养一条", "昵称", "改名", "帮助")
-# 斜杠前缀变体：QQ 官方 bot 用户习惯 /指令；若 AstrBot 唤醒前缀没配 "/"，命令匹配也能吃到
-_ALIAS_NAMES = set(_ACTION_KEYS) | {f"/{k}" for k in _ACTION_KEYS}
+# 别名 = 全部子指令 + 主指令「养鱼」本身，再加 / 与 # 前缀变体
+# （QQ 官方 bot 用户习惯 /指令；AstrBot 唤醒前缀没配 "/" 时靠别名也能吃到）
+_BASE_CMDS = set(_ACTION_KEYS) | {"养鱼"}
+_ALIAS_NAMES = _BASE_CMDS | {f"{p}{k}" for k in _BASE_CMDS for p in ("/", "#")}
 _ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排行榜|档案|图鉴|出栏|再养一条|昵称|改名|帮助)")
 _NICK_ARG_RE = re.compile("(?:昵称|改名)\\s*(.+)$")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
