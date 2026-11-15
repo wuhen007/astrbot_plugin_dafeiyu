@@ -49,6 +49,8 @@ def _panel_lines(result) -> List[str]:
                      f"{bar(d['pond_exp_cur'], width=6, max_value=step)}")
     if d.get("offline"):
         lines.append(f"（这段时间：{delta_line(d['offline'])}）")
+    if d.get("nick"):
+        lines.append(f"我的名号：{d['nick']}")
     if d.get("top_keeper"):
         lines.append(f"👑 最上心的鱼友：{d['top_keeper']}（亲密 {d['top_intimacy']}）")
     else:
@@ -103,6 +105,8 @@ def _md_panel_lines(result) -> List[str]:
     ]
     if d.get("offline"):
         lines.append(f"（这段时间：{delta_line(d['offline'])}）")
+    if d.get("nick"):
+        lines.append(f"我的名号：{d['nick']}")
     if d.get("top_keeper"):
         lines.append(f"👑 最上心的鱼友：{d['top_keeper']}（亲密 {d['top_intimacy']}）")
     if d.get("eligible"):

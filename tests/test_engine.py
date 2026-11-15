@@ -224,9 +224,9 @@ def test_graduate_gate():
 def test_graduate_and_rewards():
     pond, _ = make_pond()
     _ready_fish(pond)
-    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55)
-    pond.state.users["u2"] = UserInfo(display_name="小红", intimacy=30)
-    pond.state.users["u3"] = UserInfo(display_name="阿三", intimacy=20)
+    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55, nick_set=True)
+    pond.state.users["u2"] = UserInfo(display_name="小红", intimacy=30, nick_set=True)
+    pond.state.users["u3"] = UserInfo(display_name="阿三", intimacy=20, nick_set=True)
     r = pond.handle("u1", "小明", "出栏")
     assert r.event == "graduated"
     assert pond.state.status == "ended"
@@ -253,7 +253,7 @@ def test_blocked_after_end():
 def test_restart_keeps_archive_and_snacks():
     pond, _ = make_pond()
     _ready_fish(pond)
-    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55)
+    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55, nick_set=True)
     pond.handle("u1", "小明", "出栏")
     r = pond.handle("u1", "小明", "再养一条")
     assert r.ok
@@ -300,3 +300,54 @@ def test_community_exp_and_rank():
     assert pond.state.community_exp == 2
     r = pond.handle("u1", "小明", "排行")
     assert any("小明" in ln for ln in r.lines)
+
+
+# ---------- 名号登记 ----------
+def test_nickname_gate_then_register():
+    """无平台昵称的新鱼友：照料被引导登记 → 昵称登记后放行，排行显示名号。"""
+    pond, _ = make_pond()
+    r = pond.handle("u9", "", "投喂")            # 无平台昵称
+    assert not r.ok and r.event == "need_nick"
+    assert any("昵称" in ln for ln in r.lines)
+    r2 = pond.handle("u9", "", "昵称", "阿鱼")
+    assert r2.ok and any("阿鱼" in ln for ln in r2.lines)
+    assert pond.state.users["u9"].nick_set
+    r3 = pond.handle("u9", "", "投喂")
+    assert r3.ok                                 # 登记后放行
+    pond.handle("u1", "小明", "逗鱼")
+    rk = pond.handle("u9", "", "排行")
+    assert any("阿鱼" in ln for ln in rk.lines)
+
+
+def test_nickname_rename_and_limit():
+    pond, _ = make_pond()
+    assert pond.handle("u1", "小明", "昵称", "大明").ok     # 平台昵称也可改名
+    r = pond.handle("u1", "", "昵称", "这个名字超过了十二个字的限制")   # 16 字
+    assert not r.ok
+    r2 = pond.handle("u1", "", "昵称")           # 缺参 → 提示当前名号
+    assert not r2.ok and any("当前名号" in ln for ln in r2.lines)
+    u = pond.state.users["u1"]
+    assert u.nick_set and u.display_name == "大明"
+
+
+def test_platform_name_autoregisters():
+    """平台带真实昵称 → 自动登记，不引导。"""
+    pond, _ = make_pond()
+    r = pond.handle("u1", "小明", "投喂")
+    assert r.ok
+    assert pond.state.users["u1"].nick_set
+    r2 = pond.handle("u7", "小红", "逗鱼")
+    assert r2.ok
+
+
+def test_panel_shows_nick_hint():
+    """未登记名号的用户看面板 → 带登记提示。"""
+    pond, _ = make_pond()
+    pond.handle("u9", "", "投喂")                # 触发引导（顺带建档）
+    r = pond.handle("u9", "", "养鱼")
+    assert any("登记名号" in ln for ln in r.lines)
+    assert r.data["nick"] == ""
+    pond.handle("u9", "", "昵称", "阿鱼")
+    r2 = pond.handle("u9", "", "养鱼")
+    assert r2.data["nick"] == "阿鱼" and r2.data["nick_set"]
+    assert not any("登记名号" in ln for ln in r2.lines)

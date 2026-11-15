@@ -72,10 +72,11 @@ _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 
 # ---------------------------------------------------------------- 常量
 _ACTION_KEYS = ("投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "排行", "排行榜",
-                "档案", "图鉴", "出栏", "再养一条", "帮助")
+                "档案", "图鉴", "出栏", "再养一条", "昵称", "改名", "帮助")
 # 斜杠前缀变体：QQ 官方 bot 用户习惯 /指令；若 AstrBot 唤醒前缀没配 "/"，命令匹配也能吃到
 _ALIAS_NAMES = set(_ACTION_KEYS) | {f"/{k}" for k in _ACTION_KEYS}
-_ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排行榜|档案|图鉴|出栏|再养一条|帮助)")
+_ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排行榜|档案|图鉴|出栏|再养一条|昵称|改名|帮助)")
+_NICK_ARG_RE = re.compile("(?:昵称|改名)\\s*(.+)$")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
 _DIFF_SCALE = {"休闲": 0.7, "标准": 1.0, "硬核": 1.4}
@@ -248,7 +249,8 @@ class DaFeiYuPlugin(Star):
     async def _dispatch(self, event, command: str, arg=None):
         try:
             uid = str(event.get_sender_id() or "anon")
-            name = (event.get_sender_name() or "").strip() or "鱼友"
+            # 平台昵称原样传给引擎（为空时引擎会引导登记名号）
+            name = (event.get_sender_name() or "").strip()
             session = event.unified_msg_origin
             lock = self._locks.setdefault(session, asyncio.Lock())
             async with lock:
@@ -282,6 +284,9 @@ class DaFeiYuPlugin(Star):
             sub, arg = "玩耍", m.group(1)
         elif act:
             sub = act.group(1)
+            if sub in ("昵称", "改名"):
+                m2 = _NICK_ARG_RE.search(text)
+                arg = m2.group(1).strip() if m2 else None
         async for res in self._dispatch(event, sub, arg):
             yield res
 

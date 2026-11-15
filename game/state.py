@@ -59,6 +59,7 @@ class FishState:
 class UserInfo:
     """一位鱼友在本塘的档案。"""
     display_name: str = ""
+    nick_set: bool = False     # 是否已登记名号（未登记时照料动作会被引导登记）
     intimacy: int = 0          # 与当前这条鱼的亲密（换鱼重置）
     total_interactions: int = 0
     snacks: int = 0            # 海苔片钱包（跨鱼保留）
@@ -66,7 +67,8 @@ class UserInfo:
 
     def to_dict(self) -> dict:
         return {
-            "display_name": self.display_name, "intimacy": self.intimacy,
+            "display_name": self.display_name, "nick_set": self.nick_set,
+            "intimacy": self.intimacy,
             "total_interactions": self.total_interactions, "snacks": self.snacks,
             "last_bonus_day": self.last_bonus_day,
         }
@@ -76,6 +78,7 @@ class UserInfo:
         d = d or {}
         return cls(
             display_name=d.get("display_name", ""),
+            nick_set=bool(d.get("nick_set", False)),
             intimacy=int(d.get("intimacy", 0)),
             total_interactions=int(d.get("total_interactions", 0)),
             snacks=int(d.get("snacks", 0)),

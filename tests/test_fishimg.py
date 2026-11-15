@@ -57,7 +57,7 @@ def test_render_all_states(tmp_path):
     # 毕业态（礼帽+彩带）
     fish.exp, fish.weight, fish.mood, fish.clean = 600, 90.0, 80.0, 70.0
     pond.state.users["u1"] = __import__("game.state", fromlist=["UserInfo"]).UserInfo(
-        display_name="小明", intimacy=55)
+        display_name="小明", intimacy=55, nick_set=True)
     pond.handle("u1", "小明", "出栏")
     render_fish_png(pond.state, str(tmp_path / "grad.png"))
     assert pond.state.status == "ended"

@@ -87,7 +87,7 @@ def test_settlement_plain():
     fish = pond.state.fish
     fish.exp, fish.weight, fish.mood, fish.clean = 600, 90.0, 80.0, 70.0
     pond.state.users["u1"] = __import__("game.state", fromlist=["UserInfo"]).UserInfo(
-        display_name="小明", intimacy=55)
+        display_name="小明", intimacy=55, nick_set=True)
     r = pond.handle("u1", "小明", "出栏")
     t = render_plain(r)
     assert "出栏大典" in t and "══════" in t

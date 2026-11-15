@@ -31,11 +31,13 @@ COMMANDS: Dict[str, str] = {
     "档案": "archive", "图鉴": "archive",
     "出栏": "graduate",
     "再养一条": "restart",
+    "昵称": "nickname", "改名": "nickname",
     "帮助": "help",
 }
 
 HELP_LINES = (
     "【肥鱼养成记】全群共养一条鱼，把它喂成「大肥鱼」再风光出栏！",
+    "· 首次照料先「养鱼 昵称 名字」登记名号，排行和档案显示它（可随时改名）",
     "· 投喂/加餐补饱腹，逗鱼补心情，净水补洁净，玩耍赚体重但耗体力",
     "· 属性随现实时间自然衰减；同一动作连用收益递减，要换着花样来",
     "· 每日首次互动领海苔片补贴；毕业出栏按贡献发大奖励",
@@ -204,11 +206,23 @@ class Pond:
     def _user(self, uid: str, name: str) -> UserInfo:
         u = self.state.users.get(uid)
         if u is None:
-            u = UserInfo(display_name=name or "匿名鱼友", snacks=self.cfg.start_snacks)
+            # 平台自带真实昵称 → 直接登记；没有（如 QQ 官方群聊）→ 走昵称引导
+            u = UserInfo(display_name=name or "", nick_set=bool(name),
+                         snacks=self.cfg.start_snacks)
             self.state.users[uid] = u
-        elif name and name != u.display_name:
-            u.display_name = name
+        elif name and not u.nick_set and name != u.display_name:
+            u.display_name = name      # 平台后来补了昵称且未主动登记 → 采用
+            u.nick_set = True
         return u
+
+    def _nick_gate(self, user: UserInfo) -> Optional[ActionResult]:
+        if user.nick_set:
+            return None
+        r = ActionResult(ok=False, event="need_nick", title="初次见面",
+                         lines=["先给自己起个名号吧：发送「养鱼 昵称 名字」",
+                                "登记后排行和档案就显示它啦（不超过 12 字）。"])
+        r.buttons = [Button("养鱼", "养鱼"), Button("帮助", "养鱼 帮助")]
+        return r
 
     def _top_keeper(self) -> Optional[Tuple[str, int]]:
         best = None
@@ -250,7 +264,11 @@ class Pond:
         gate = self._ended_gate()
         if gate is not None:
             return None, gate
-        return self._user(uid, name), None
+        user = self._user(uid, name)
+        gate = self._nick_gate(user)
+        if gate is not None:
+            return None, gate
+        return user, None
 
     def _cooldown_minutes(self) -> Dict[str, int]:
         c = self.cfg
@@ -325,6 +343,9 @@ class Pond:
         step = self.cfg.pond_level_exp_step
         keeper = self._top_keeper()
         r = ActionResult(event="panel", title=f"{fish.name} · {stage}", lines=[pflavor])
+        me = self.state.users.get(uid)
+        if me is not None and not me.nick_set:
+            r.lines.append("📌 先登记名号：发「养鱼 昵称 名字」，排行里才能认出你")
         r.data = {
             "name": fish.name, "level": lv, "stage": stage,
             "exp_cur": cur, "exp_need": need,
@@ -337,6 +358,8 @@ class Pond:
             "pond_exp_cur": st.community_exp % step if step else 0,
             "pond_exp_need": step,
             "offline": offline,
+            "nick": me.display_name if me else "",
+            "nick_set": bool(me.nick_set) if me else False,
             "top_keeper": keeper[0] if keeper else None,
             "top_intimacy": keeper[1] if keeper else 0,
             "eligible": self._eligible(),
@@ -537,6 +560,33 @@ class Pond:
         lines += tips
         return self._commit(user, "weigh", {}, lines, w.exp, title="称重")
 
+    # -------------------------------------------------- 名号登记
+    def _do_nickname(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
+        """登记/修改名号：养鱼 昵称 名字。不算照料动作（无经验/亲密/群进度）。"""
+        self._touch()
+        user = self._user(uid, name)
+        new = (arg or "").strip()
+        if not new:
+            cur = user.display_name or "（未登记）"
+            r = ActionResult(ok=False, title="名号登记",
+                             lines=[f"当前名号：{cur}",
+                                    "发「养鱼 昵称 名字」登记或改名（不超过 12 字）。"])
+            r.buttons = self._main_buttons()
+            return r
+        if len(new) > 12:
+            r = ActionResult(ok=False, title="太长了",
+                             lines=["名号最多 12 个字，换一个吧。"])
+            r.buttons = self._main_buttons()
+            return r
+        old = user.display_name or "（未登记）"
+        user.display_name = new
+        user.nick_set = True
+        r = ActionResult(event="nick", title="名号登记",
+                         lines=[f"「{old}」→「{new}」",
+                                "排行和档案以后就显示这个名字啦！"])
+        r.buttons = self._main_buttons()
+        return r
+
     # -------------------------------------------------- 群玩法
     def _do_rank(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
         self._touch()
@@ -573,6 +623,10 @@ class Pond:
         self._touch()
         if self.state.status == "ended":
             return self._settlement_result()
+        user = self._user(uid, name)
+        gate = self._nick_gate(user)
+        if gate is not None:
+            return gate
         miss = growth.graduate_missing(self.state.fish, self.cfg)
         if miss:
             r = ActionResult(ok=False, title="还差一点",
@@ -584,6 +638,10 @@ class Pond:
 
     def _do_restart(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
         self._touch()
+        user = self._user(uid, name)
+        gate = self._nick_gate(user)
+        if gate is not None:
+            return gate
         if self.state.status != "ended":
             r = ActionResult(ok=False, title="还活着呢",
                              lines=["这条鱼还活蹦乱跳，可不能说换就换～"])
