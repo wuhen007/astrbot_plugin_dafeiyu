@@ -85,21 +85,21 @@ def _stub_astrbot(monkeypatch):
         def fromFileSystem(cls, p):
             return cls(p)
 
-    class CallbackAction:
-        def __init__(self, data=None, **kwargs):
-            self.data = data
-
     class Button:
+        # 模拟 v4.29.x：CallbackAction 是 Button 的内部类，不顶层导出
         def __init__(self, id=None, label=None, action=None, **kwargs):
             self.id, self.label, self.action = id, label, action
+
+        class CallbackAction:
+            def __init__(self, data=None, **kwargs):
+                self.data = data
 
     class ActionRow:
         def __init__(self, buttons=None, fallback_text=None, **kwargs):
             self.buttons = buttons or []
             self.fallback_text = fallback_text
 
-    mc.Plain, mc.Image, mc.CallbackAction, mc.Button, mc.ActionRow = \
-        Plain, Image, CallbackAction, Button, ActionRow
+    mc.Plain, mc.Image, mc.Button, mc.ActionRow = Plain, Image, Button, ActionRow
 
     def command(command_name=None, sub_command=None, alias=None, **kwargs):
         def deco(func):

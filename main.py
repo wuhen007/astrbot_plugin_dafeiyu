@@ -48,14 +48,20 @@ except ImportError:
 
 Plain = Image = ActionRow = Button = CallbackAction = None
 try:
-    from astrbot.api.message_components import (                          # noqa: E402
-        ActionRow, Button, CallbackAction, Image, Plain,
-    )
+    from astrbot.api.message_components import ActionRow, Button, Image, Plain  # noqa: E402
 except ImportError:
     try:
         from astrbot.api.message_components import Image, Plain           # noqa: E402
     except ImportError:
         pass
+if Button is not None:
+    # v4.29.x：CallbackAction/UrlAction 是 Button 的内部类，须 Button.CallbackAction；
+    # 未来版本可能改为顶层导出，两种都试。
+    try:
+        from astrbot.api.message_components import CallbackAction as _CA  # noqa: E402
+        CallbackAction = _CA
+    except ImportError:
+        CallbackAction = getattr(Button, "CallbackAction", None)
 _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 
 # Markdown 组件：旧版 AstrBot 的 qqofficial 适配器靠它识别 md 消息；v4 master 无此类
