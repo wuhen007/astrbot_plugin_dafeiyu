@@ -219,8 +219,10 @@ class Pond:
         if user.nick_set:
             return None
         r = ActionResult(ok=False, event="need_nick", title="初次见面",
-                         lines=["先给自己起个名号吧：发送「养鱼 昵称 名字」",
-                                "登记后排行和档案就显示它啦（不超过 12 字）。"])
+                         lines=["第一次见面，先登记一下～",
+                                "直接回复你的名字就行（12 字以内），",
+                                "也可以发「养鱼 昵称 名字」。",
+                                "之后喂养和排行榜都记在这个名字下。"])
         r.buttons = [Button("养鱼", "养鱼"), Button("帮助", "养鱼 帮助")]
         return r
 
