@@ -128,10 +128,40 @@ def _default_data_dir() -> Path:
     return Path("data") / "plugin_data" / "astrbot_plugin_dafeiyu"
 
 
+def _build_keyboard_locally(rows_components) -> dict:
+    """不经 encode_button_callback（其 SQLite 回调注册表在并发写时会发生
+    database is locked）直接构建 QQ 键盘 payload：我们的按钮全部是指令
+    按钮 type=2，data 即指令文本，无需注册表。"""
+    style_cls = getattr(Button, "Style", None)
+    style_map = {}
+    if style_cls is not None:
+        style_map = {getattr(style_cls, n, None): v
+                     for n, v in (("DEFAULT", 0), ("PRIMARY", 3),
+                                  ("SUCCESS", 1), ("DANGER", 0))}
+        style_map.pop(None, None)
+    out_rows = []
+    for row in rows_components:
+        buttons = []
+        for btn in row.buttons:
+            data = getattr(btn.action, "data", None) or {}
+            cmd = str(data.get("cmd") or "")
+            label = str(btn.label)[:16]
+            buttons.append({
+                "id": str(btn.id)[:64],
+                "render_data": {"label": label, "visited_label": label,
+                                "style": style_map.get(btn.style, 0)},
+                "action": {"type": 2, "permission": {"type": 2}, "data": cmd,
+                           "enter": True,
+                           "unsupport_tips": f"请直接发送：{cmd}"},
+            })
+        out_rows.append({"buttons": buttons})
+    return {"content": {"rows": out_rows}}
+
+
 def _install_command_button_patch() -> bool:
-    """把 qqofficial 的回调按钮改写为指令按钮（action.type=2）：点击后由
-    客户端以用户身份发送 data["cmd"] 文本，群里可见、无过期提示。
-    结构不符时静默跳过，按钮退回回调交互（on_button 兜底路由）。"""
+    """指令按钮方案：消息链里全部是「我们家的指令按钮」（data 含 cmd）时，
+    本地直接构建 QQ 键盘 payload（type=2，不写回调注册表数据库，规避
+    database is locked）；链里混有别家回调按钮时走原逻辑（适配器编码 token）。"""
     try:
         from astrbot.core.platform.sources.qqofficial.qqofficial_message_event import (
             QQOfficialMessageEvent as Target)
@@ -142,28 +172,20 @@ def _install_command_button_patch() -> bool:
     original = Target._parse_keyboard
 
     def shim(message_chain):
-        payload = original(message_chain)
-        if not payload or "content" not in payload:
-            return payload
         rows = [c for c in message_chain.chain
                 if isinstance(c, ActionRow) and c.buttons]
-        rewritten = 0
-        for row_payload, row in zip(payload["content"].get("rows", []), rows):
-            for btn_payload, btn in zip(row_payload.get("buttons", []), row.buttons):
-                data = getattr(btn.action, "data", None)
-                cmd = data.get("cmd") if isinstance(data, dict) else None
-                if cmd:
-                    btn_payload["action"] = {
-                        "type": 2,
-                        "permission": {"type": 2},
-                        "data": cmd,
-                        "enter": True,
-                        "unsupport_tips": f"请直接发送：{cmd}",
-                    }
-                    rewritten += 1
-        logger.info(f"[肥鱼养成记][shim] 键盘行数={len(payload['content'].get('rows', []))} "
-                    f"指令按钮改写={rewritten}")
-        return payload
+        all_buttons = [b for r in rows for b in r.buttons]
+        ours = bool(all_buttons) and all(
+            isinstance(getattr(b.action, "data", None), dict)
+            and b.action.data.get("cmd") for b in all_buttons)
+        if ours:
+            try:
+                payload = _build_keyboard_locally(rows)
+                logger.debug(f"[dafeiyu-shim] 本地构建指令键盘：{len(all_buttons)} 按钮")
+                return payload
+            except Exception as e:
+                logger.warning(f"[dafeiyu-shim] 本地构建失败({e})，回退原逻辑")
+        return original(message_chain)
 
     try:
         Target._parse_keyboard = staticmethod(shim)

@@ -285,38 +285,67 @@ def test_button_rows_layout(plugin):
     assert rows[0].action_timeout == 86400
 
 
-def test_command_button_shim_rewrite(plugin, monkeypatch):
-    """指令按钮补丁：伪造适配器目标类，验证 zip 对位改写 type=2 + data=/指令。"""
+def test_command_button_shim_builds_locally_on_db_lock(plugin, monkeypatch):
+    """AstrBot 回调注册表 SQLite 报 database is locked 时，shim 本地构建键盘
+    （type=2 指令按钮、不写注册表），消息发送不再失败。"""
+    import sqlite3
     main, p, tmp = plugin
 
     class FakeTarget:
         _dfy_cmd_patched = False
+        original_calls = 0
 
         @staticmethod
         def _parse_keyboard(message_chain):
-            return {"content": {"rows": [{"buttons": [
-                {"id": "dfy:投喂||投喂",
-                 "render_data": {"label": "投喂"},
-                 "action": {"type": 1, "data": "astrbot:token"}},
-            ]}]}}
+            FakeTarget.original_calls += 1
+            raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setitem(
         sys.modules,
         "astrbot.core.platform.sources.qqofficial.qqofficial_message_event",
         types.SimpleNamespace(QQOfficialMessageEvent=FakeTarget))
     assert main._install_command_button_patch() is True
-    assert getattr(FakeTarget, "_dfy_cmd_patched") is True
 
     row = main.ActionRow(buttons=[main.Button(
         id="dfy:投喂||投喂", label="投喂",
         action=main.CallbackAction(data={"cmd": "/投喂", "act": "投喂", "arg": None}))])
-    chain = types.SimpleNamespace(chain=[main.Plain("摘要"), row])
+    chain = types.SimpleNamespace(chain=[main.Plain("【出栏图鉴】"), row])
     kb = FakeTarget._parse_keyboard(chain)
     btn = kb["content"]["rows"][0]["buttons"][0]
     assert btn["action"]["type"] == 2
     assert btn["action"]["data"] == "/投喂"
     assert btn["action"]["enter"] is True
     assert btn["action"]["unsupport_tips"] == "请直接发送：/投喂"
+    assert "database" not in str(kb)            # 键盘构建成功，不再抛库锁
+
+
+def test_command_button_shim_passes_foreign_buttons(plugin, monkeypatch):
+    """混有/仅有别家回调按钮的消息链 → 走原逻辑（由适配器编码 token）。"""
+    main, p, tmp = plugin
+    calls = []
+
+    class FakeTarget:
+        _dfy_cmd_patched = False
+
+        @staticmethod
+        def _parse_keyboard(message_chain):
+            calls.append(1)
+            return {"content": {"rows": []}}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "astrbot.core.platform.sources.qqofficial.qqofficial_message_event",
+        types.SimpleNamespace(QQOfficialMessageEvent=FakeTarget))
+    assert main._install_command_button_patch() is True
+
+    foreign = main.ActionRow(buttons=[main.Button(
+        id="zt:x", label="x", action=main.CallbackAction(data={"act": "zt.y"}))])
+    kb = FakeTarget._parse_keyboard(types.SimpleNamespace(chain=[foreign]))
+    assert kb == {"content": {"rows": []}} and calls
+
+    # 纯文本链（无按钮）也走原逻辑
+    kb2 = FakeTarget._parse_keyboard(types.SimpleNamespace(chain=[main.Plain("x")]))
+    assert kb2 == {"content": {"rows": []}} and len(calls) == 2
 
 
 def test_integrity_check_raises_on_stale_render(plugin, monkeypatch):
