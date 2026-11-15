@@ -65,8 +65,11 @@ def _load_font(size):
     return None
 
 
-def render_card_png(state, lines, out_path, config=None, custom_img=None) -> str:
-    """状态卡：lines 逐行画进上面板；下面鱼塘场景（custom_img 提供时贴自定义贴图）。"""
+def render_card_png(state, lines, out_path, config=None, custom_img=None,
+                    scene: bool = True) -> str:
+    """状态卡：lines 逐行画进文本面板；scene=True 时下方再画鱼塘场景
+    （custom_img 提供时贴自定义贴图）。scene=False 则只输出白底文字面板，
+    排版完全由渲染决定（不受平台文本改写影响）。"""
     try:
         from PIL import Image, ImageDraw
     except ImportError as e:
@@ -80,7 +83,7 @@ def render_card_png(state, lines, out_path, config=None, custom_img=None) -> str
     lines = [str(x).strip() for x in (lines or []) if str(x).strip()]
 
     panel_h = 14 + (len(lines) * 30 + 6 if lines else 0) + 10
-    H = panel_h + _SCENE_H
+    H = panel_h + (_SCENE_H if scene else 0)
     img = Image.new("RGBA", (_W, H), (*_PANEL_BG, 255))
     d = ImageDraw.Draw(img)
 
@@ -91,9 +94,11 @@ def render_card_png(state, lines, out_path, config=None, custom_img=None) -> str
             d.text((20, y), _safe_text(line), font=font_title if i == 0 else font_s,
                    fill=(*_PANEL_TEXT, 255))
             y += 36 if i == 0 else 30
-        d.line((0, panel_h - 5, _W, panel_h - 5), fill=(*_PANEL_LINE, 255), width=2)
+        if scene:
+            d.line((0, panel_h - 5, _W, panel_h - 5), fill=(*_PANEL_LINE, 255), width=2)
 
-    _draw_scene(d, img, state, rng, cfg, y_off=panel_h, custom_img=custom_img)
+    if scene:
+        _draw_scene(d, img, state, rng, cfg, y_off=panel_h, custom_img=custom_img)
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

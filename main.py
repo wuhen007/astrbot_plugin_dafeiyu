@@ -29,7 +29,8 @@ if str(PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(PLUGIN_DIR))
 
 from game import COMMANDS, GameConfig, JsonStore, load_or_create          # noqa: E402
-from render import render_fish_png, render_markdown, render_plain         # noqa: E402
+from render import (                                                      # noqa: E402
+    render_card_png, render_fish_png, render_markdown, render_plain)
 from render import stickers as sticker_src                                # noqa: E402
 from render.textcard import delta_line                                    # noqa: E402
 
@@ -258,15 +259,18 @@ class DaFeiYuPlugin(Star):
             return result.event
         return self._STICKER_TITLE_KEY.get(result.title, "panel")
 
-    def _get_sticker(self, result):
-        """按指令/状态从贴图站挑一张并下载到本地；任何失败返回 None。"""
+    def _get_sticker(self, result, pond: Pond):
+        """按指令/状态从贴图站挑一张并下载到本地；任何失败返回 None。
+        挑选种子与状态绑定：同一状态稳定命中同一张（命中本地缓存）。"""
         try:
             key = self._sticker_key(result)
             tags, kws = self._STICKER_MAP.get(key, self._STICKER_MAP["panel"])
             stickers = sticker_src.load_index(self._sticker_dir, self._sticker_api)
             if not stickers:
                 return None
-            s = sticker_src.pick_sticker(stickers, tags, kws, random.Random())
+            fish = pond.state.fish
+            seed = f"{key}|{round(fish.satiety)}|{round(fish.mood)}|{round(fish.weight)}"
+            s = sticker_src.pick_sticker(stickers, tags, kws, random.Random(seed))
             if not s:
                 return None
             return sticker_src.download_sticker(s, self._sticker_dir / "img")
@@ -280,6 +284,33 @@ class DaFeiYuPlugin(Star):
         h = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
         return render_fish_png(pond.state, str(self._image_dir / f"{h}.png"),
                                config=pond.cfg)
+
+    def _one_liner(self, result) -> str:
+        """键盘消息的正文：单行摘要（全量状态在面板图里，压平插件改不动单行）。"""
+        if result.event == "need_nick":
+            return md_text("【初次见面】直接回复你的名字就行（12 字内），"
+                           "也可发「养鱼 昵称 名字」")
+        if result.event == "panel":
+            d = result.data
+            base = f"【🐟 {d['name']} · {d['stage']}】点按钮互动，发「帮助」看玩法"
+        elif result.event in ("graduated", "runaway"):
+            s = (result.data or {}).get("summary", {})
+            base = f"【{result.title}】评级 {s.get('grade', 'C')} · 详情见图"
+        else:
+            first = result.lines[0] if result.lines else ""
+            base = f"【{result.title}】{first}"
+            dl = delta_line(result.deltas)
+            if dl:
+                base = f"{base} ｜ {dl}"
+        return md_text(base)
+
+    def _render_panel(self, session: str, pond: Pond, result) -> str:
+        """状态文字渲染成白底面板图（排版绝对稳定，不受平台文本改写影响）。"""
+        lines = [ln for ln in render_markdown(result).split("\n")
+                 if not ln.startswith("[")]          # 按钮提示行去掉（键盘上有真按钮）
+        h = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
+        return render_card_png(pond.state, lines, str(self._image_dir / f"{h}.png"),
+                               config=pond.cfg, scene=False)
 
     def _md(self, text: str) -> str:
         return md_text(text)
@@ -322,11 +353,11 @@ class DaFeiYuPlugin(Star):
         return rows
 
     def _build_result(self, event, result):
-        """「md 文本卡 + 按钮」：markdown 模式且有按钮组件走 msg_type=2；
-        否则纯文本全量卡片（\\n 原生换行）。图片不在这里发（见 _dispatch）。"""
+        """「单行摘要 + 指令按钮」：全量状态在面板图里（排版稳定），
+        文本只留一行（压平插件改不动单行）。"""
         rows = self._build_rows(result) if self._md_mode else []
         if rows:
-            res = event.chain_result([Plain(self._md(render_markdown(result))), *rows])
+            res = event.chain_result([Plain(self._one_liner(result)), *rows])
             try:
                 res.use_markdown(True)
             except Exception:
@@ -346,11 +377,14 @@ class DaFeiYuPlugin(Star):
             if result.event == "need_nick":
                 # 引导免费文本回昵称（180s 内的下一条非指令消息即登记）
                 self._pending[(session, uid)] = time.time() + _NICK_TTL
-            # ① 贴图/鱼图直接发原图（不合成背景）；交互事件不发图
+            # ① 状态面板图 + 贴图原图直发（交互事件不发图）
             if self._send_image and Image is not None \
                     and event.get_button_interaction() is None:
                 try:
-                    custom = await asyncio.to_thread(self._get_sticker, result)
+                    panel_path = await asyncio.to_thread(
+                        self._render_panel, session, pond, result)
+                    yield event.image_result(panel_path)
+                    custom = await asyncio.to_thread(self._get_sticker, result, pond)
                     if custom is None:
                         custom = self._pick_custom_img()
                     if custom is None:
@@ -359,7 +393,7 @@ class DaFeiYuPlugin(Star):
                         yield event.image_result(custom)
                 except Exception as e:
                     logger.warning(f"[肥鱼养成记] 发图失败，跳过：{e}")
-            # ② md 文本卡 + 按钮
+            # ② 单行摘要 + 指令按钮
             yield self._build_result(event, result)
         except Exception as e:
             logger.exception("[肥鱼养成记] 处理指令 %r 失败", command)
