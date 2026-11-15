@@ -1,7 +1,9 @@
 """贴图源模块测试（纯逻辑，不联网）。"""
+import io
 import json
 import os
 import time
+from pathlib import Path
 
 from render import stickers
 
@@ -52,3 +54,42 @@ def test_load_index_total_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(stickers, "_http_get",
                         lambda url, timeout=12: (_ for _ in ()).throw(OSError("net down")))
     assert stickers.load_index(tmp_path, "https://invalid.invalid/index.json") is None
+
+
+def test_download_sticker_converts_webp_to_png(tmp_path, monkeypatch):
+    """QQ 官方富媒体不支持 webp：下载后自动转 PNG（透明底贴白）。"""
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGBA", (40, 30), (10, 20, 30, 200)).save(buf, "WEBP")
+    monkeypatch.setattr(stickers, "_http_get", lambda url, timeout=20: buf.getvalue())
+    s = {"large": "https://x/large.webp"}
+    out = stickers.download_sticker(s, tmp_path / "img")
+    assert out and Path(out).suffix == ".png"
+    img = Image.open(out)
+    assert img.format == "PNG" and img.mode == "RGB"
+    out2 = stickers.download_sticker(s, tmp_path / "img")
+    assert Path(out2).read_bytes() == Path(out).read_bytes()   # 二次调用命中缓存
+
+
+def test_download_sticker_keeps_gif(tmp_path, monkeypatch):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("P", (20, 20), 3).save(buf, "GIF")
+    monkeypatch.setattr(stickers, "_http_get", lambda url, timeout=20: buf.getvalue())
+    s = {"large": "https://x/anim.gif"}
+    out = stickers.download_sticker(s, tmp_path / "img")
+    assert Path(out).suffix == ".gif"          # gif 受支持，保留动画
+
+
+def test_ensure_png_for_custom_file(tmp_path):
+    from PIL import Image
+    webp = tmp_path / "fish_imgs" / "a.webp"
+    webp.parent.mkdir()
+    Image.new("RGBA", (30, 30), (1, 2, 3, 255)).save(webp, "WEBP")
+    out = stickers.ensure_png(str(webp), tmp_path / "conv")
+    assert Path(out).suffix == ".png"
+    img = Image.open(out)
+    assert img.mode == "RGB"
+    jpg = tmp_path / "b.jpg"
+    Image.new("RGB", (20, 20), (9, 9, 9)).save(jpg, "JPEG")
+    assert stickers.ensure_png(str(jpg), tmp_path / "conv") == str(jpg)   # jpg 原样

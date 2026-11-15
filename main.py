@@ -245,8 +245,10 @@ class DaFeiYuPlugin(Star):
             if self._custom_img_dir.is_dir():
                 imgs = [p for p in self._custom_img_dir.iterdir()
                         if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp")]
-                if imgs:
-                    return str(random.choice(imgs))
+            if imgs:
+                # fish_imgs 里可能混有 webp：统一转 PNG 再发（QQ 富媒体不支持 webp）
+                return sticker_src.ensure_png(str(random.choice(imgs)),
+                                              self._sticker_dir / "img")
         except Exception as e:
             logger.warning(f"[肥鱼养成记] 自定义鱼图读取失败：{e}")
         return None

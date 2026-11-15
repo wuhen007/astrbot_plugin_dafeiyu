@@ -17,6 +17,8 @@ from pathlib import Path
 INDEX_TTL = 6 * 3600      # 索引缓存 6 小时
 UA = "astrbot_plugin_dafeiyu (+https://github.com/wuhen007/astrbot_plugin_dafeiyu)"
 _FISH_MARKS = ("鱼", "鲸鱼", "肥鱼")   # alt 含这些字样的优先（蓝色大肥鱼本尊）
+# QQ 官方富媒体支持的格式；webp 会被拒（错误 850019 富媒体文件格式不支持）
+SUPPORTED_RAW = (".jpg", ".jpeg", ".png", ".gif")
 
 
 def _http_get(url: str, timeout: int = 12) -> bytes:
@@ -74,22 +76,67 @@ def pick_sticker(stickers, tags_want, alt_keywords, rng=None, prefer_fish=True):
     return best
 
 
+def _to_png(data: bytes) -> bytes:
+    """任意图片字节 → PNG（透明底贴白，动图取首帧）。QQ 官方富媒体
+    不支持 webp，这里统一归一化。需要 Pillow。"""
+    import io
+    from PIL import Image
+    img = Image.open(io.BytesIO(data))
+    if getattr(img, "is_animated", False):
+        img.seek(0)
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    else:
+        img = img.convert("RGB")
+    out = io.BytesIO()
+    img.save(out, "PNG")
+    return out.getvalue()
+
+
+def ensure_png(path, cache_dir) -> str:
+    """本地图片若不是 QQ 支持的格式（如 webp）→ 转存 PNG 并缓存。
+    jpg/jpeg/gif/png 原样返回。"""
+    p = Path(path)
+    if p.suffix.lower() in SUPPORTED_RAW:
+        return str(p)
+    data = p.read_bytes()
+    key = hashlib.sha1(data).hexdigest()
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out = cache_dir / f"conv-{key}.png"
+    if out.exists() and out.stat().st_size > 0:
+        return str(out)
+    out.write_bytes(_to_png(data))
+    return str(out)
+
+
 def download_sticker(sticker, cache_dir):
-    """下载 large 图到本地（按 url 哈希缓存），返回本地路径或 None。"""
+    """下载贴图到本地（按 url 哈希缓存）；非 QQ 支持格式自动转 PNG。
+    返回本地路径或 None。"""
     url = sticker.get("large") or sticker.get("preview") or sticker.get("original")
     if not url:
         return None
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    ext = Path(url).suffix or ".webp"
-    p = cache_dir / f"{hashlib.sha1(url.encode('utf-8')).hexdigest()}{ext}"
-    if p.exists() and p.stat().st_size > 0:
-        return str(p)
+    ext = Path(url).suffix.lower() or ".webp"
+    raw = cache_dir / f"{hashlib.sha1(url.encode('utf-8')).hexdigest()}{ext}"
+    if not raw.exists() or raw.stat().st_size == 0:
+        try:
+            data = _http_get(url, timeout=20)
+            tmp = raw.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(raw)
+        except Exception:
+            return None
+    if ext in SUPPORTED_RAW:
+        return str(raw)
     try:
-        data = _http_get(url, timeout=20)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(p)
-        return str(p)
+        png = cache_dir / f"{raw.stem}.png"
+        if not png.exists() or png.stat().st_size == 0:
+            png.write_bytes(_to_png(raw.read_bytes()))
+        return str(png)
     except Exception:
         return None
