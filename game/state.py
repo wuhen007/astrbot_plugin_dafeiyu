@@ -66,6 +66,12 @@ class UserInfo:
     last_bonus_day: Optional[str] = None
     last_sign_day: Optional[str] = None   # 最后打卡日（YYYY-MM-DD）
     sign_streak: int = 0                  # 连续打卡天数
+    last_guess_at: Optional[float] = None  # 猜鱼开局时间，跨鱼保留冷却
+    last_care_at: Optional[float] = None
+    last_adventure_day: Optional[str] = None
+    keepsakes: Dict[str, int] = field(default_factory=dict)
+    materials: int = 0
+    sports_badges: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -74,6 +80,11 @@ class UserInfo:
             "total_interactions": self.total_interactions, "snacks": self.snacks,
             "last_bonus_day": self.last_bonus_day,
             "last_sign_day": self.last_sign_day, "sign_streak": self.sign_streak,
+            "last_guess_at": self.last_guess_at,
+            "last_care_at": self.last_care_at,
+            "last_adventure_day": self.last_adventure_day,
+            "keepsakes": dict(self.keepsakes), "materials": self.materials,
+            "sports_badges": self.sports_badges,
         }
 
     @classmethod
@@ -88,6 +99,12 @@ class UserInfo:
             last_bonus_day=d.get("last_bonus_day"),
             last_sign_day=d.get("last_sign_day"),
             sign_streak=int(d.get("sign_streak", 0)),
+            last_guess_at=d.get("last_guess_at"),
+            last_care_at=d.get("last_care_at"),
+            last_adventure_day=d.get("last_adventure_day"),
+            keepsakes=dict(d.get("keepsakes") or {}),
+            materials=int(d.get("materials", 0)),
+            sports_badges=int(d.get("sports_badges", 0)),
         )
 
 
@@ -106,6 +123,17 @@ class PondState:
     pending_play: Optional[Dict] = None   # 套圈进行中：{hidden, opened_by, opened_by_name, opened_at}
     pending_rescue: Optional[Dict] = None  # 求援进行中：{kind, text, need, got: {uid: name}, expires}
     archive: List[Dict] = field(default_factory=list)   # 出栏图鉴
+    pending_guess: Dict[str, Dict] = field(default_factory=dict)
+    pending_treasure: Optional[Dict] = None
+    pending_adventure: Optional[Dict] = None
+    daily_heartwish: Optional[Dict] = None
+    story_flags: List[str] = field(default_factory=list)
+    decorations: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    round_stats: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    round_events: List[str] = field(default_factory=list)
+    sports_week: Optional[Dict] = None
+    weekly_quest: Optional[Dict] = None
+    weekly_reports: List[Dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -118,6 +146,14 @@ class PondState:
             "pending_play": self.pending_play,
             "pending_rescue": self.pending_rescue,
             "archive": list(self.archive),
+            "pending_guess": dict(self.pending_guess),
+            "pending_treasure": self.pending_treasure,
+            "pending_adventure": self.pending_adventure,
+            "daily_heartwish": self.daily_heartwish,
+            "story_flags": list(self.story_flags),
+            "decorations": self.decorations, "round_stats": self.round_stats,
+            "round_events": list(self.round_events), "sports_week": self.sports_week,
+            "weekly_quest": self.weekly_quest, "weekly_reports": list(self.weekly_reports),
         }
 
     @classmethod
@@ -136,4 +172,15 @@ class PondState:
             pending_play=d.get("pending_play"),
             pending_rescue=d.get("pending_rescue"),
             archive=list(d.get("archive") or []),
+            pending_guess=dict(d.get("pending_guess") or {}),
+            pending_treasure=d.get("pending_treasure"),
+            pending_adventure=d.get("pending_adventure"),
+            daily_heartwish=d.get("daily_heartwish"),
+            story_flags=list(d.get("story_flags") or []),
+            decorations=dict(d.get("decorations") or {}),
+            round_stats=dict(d.get("round_stats") or {}),
+            round_events=list(d.get("round_events") or []),
+            sports_week=d.get("sports_week"),
+            weekly_quest=d.get("weekly_quest"),
+            weekly_reports=list(d.get("weekly_reports") or []),
         )

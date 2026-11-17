@@ -123,6 +123,48 @@ class WishConfig:
 
 
 @dataclass
+class GuessConfig:
+    """猜鱼心思：每人独立开局，冷却从开局计算。"""
+    cooldown_min: int = 30
+    expire_min: int = 5
+    attempts: int = 3
+    energy_cost: float = 10.0
+    reward_snacks: int = 1
+    mood_win: float = 8.0
+    mood_miss: float = 2.0
+    exp: int = 5
+
+
+@dataclass
+class TreasureConfig:
+    """合力寻宝：三位不同鱼友依次接力。"""
+    cooldown_min: int = 60
+    expire_min: int = 10
+    reward_snacks: int = 2
+    reward_mood: float = 12.0
+    exp: int = 8
+
+
+@dataclass
+class AdventureConfig:
+    expire_min: int = 10
+    help_energy: float = 8.0
+    explore_energy: float = 4.0
+    deep_energy: float = 6.0
+    mood_gain: float = 6.0
+    fail_mood_loss: float = 2.0
+    success_chance: float = 0.65
+    exp: int = 4
+
+
+@dataclass
+class HeartwishConfig:
+    active_days: int = 7
+    max_people: int = 3
+    mood_gain: float = 10.0
+
+
+@dataclass
 class GameConfig:
     # --- 自然变化（每小时） ---
     decay_satiety: float = 2.5
@@ -182,3 +224,7 @@ class GameConfig:
     fishing: FishingAction = field(default_factory=FishingAction)
     rescue: RescueConfig = field(default_factory=RescueConfig)
     wish: WishConfig = field(default_factory=WishConfig)
+    guess: GuessConfig = field(default_factory=GuessConfig)
+    treasure: TreasureConfig = field(default_factory=TreasureConfig)
+    adventure: AdventureConfig = field(default_factory=AdventureConfig)
+    heartwish: HeartwishConfig = field(default_factory=HeartwishConfig)

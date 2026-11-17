@@ -53,7 +53,7 @@ def test_feed_basic():
 def test_pet_clean_snack():
     pond, clock = make_pond()
     r = pond.handle("u1", "小明", "逗鱼")
-    assert r.deltas["心情"] == pytest.approx(6.0)
+    assert r.deltas["心情"] == pytest.approx(6.0 + pond.cfg.heartwish.mood_gain)
     assert r.deltas["亲密"] == 1
     pond.state.fish.clean = 20.0        # 压低起点，避免 80+35 触顶截断
     clock.advance_hours(0.3)
@@ -96,7 +96,7 @@ def test_cooldown_pet():
 def test_diminishing_returns():
     pond, clock = make_pond()
     r1 = pond.handle("u1", "小明", "逗鱼")
-    assert r1.deltas["心情"] == pytest.approx(6.0)
+    assert r1.deltas["心情"] == pytest.approx(6.0 + pond.cfg.heartwish.mood_gain)
     clock.advance(15 * 60 + 1)
     r2 = pond.handle("u1", "小明", "逗鱼")
     assert r2.deltas["心情"] == pytest.approx(4.5)      # ×0.75

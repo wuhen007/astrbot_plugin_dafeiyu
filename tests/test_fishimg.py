@@ -61,3 +61,26 @@ def test_render_all_states(tmp_path):
     pond.handle("u1", "小明", "出栏")
     render_fish_png(pond.state, str(tmp_path / "grad.png"))
     assert pond.state.status == "ended"
+
+
+def test_decorated_scene_and_memorial_snapshot(tmp_path):
+    from copy import deepcopy
+    from render.fishimg import render_memorial_png
+    pond = make_pond()
+    plain = tmp_path / "plain.png"
+    decor = tmp_path / "decor.png"
+    render_fish_png(pond.state, str(plain))
+    pond.state.decorations = {"水草角": {"a": 5}, "贝壳小屋": {"a": 8}, "月亮灯": {"a": 12}}
+    render_fish_png(pond.state, str(decor))
+    assert plain.read_bytes() != decor.read_bytes()
+    pond.handle("u1", "很长的鱼友昵称" * 5, "逗鱼")
+    pond._end("graduated", pond.clock())
+    page = deepcopy(pond.state.archive[0])
+    a, b = tmp_path / "page-a.png", tmp_path / "page-b.png"
+    render_memorial_png(page, str(a))
+    pond.handle("u1", "鱼友", "再养一条")
+    render_memorial_png(page, str(b))
+    assert a.read_bytes() == b.read_bytes()
+    from PIL import Image
+    assert Image.open(a).height > Image.open(decor).height
+    render_memorial_png({"fish_name": "旧鱼"}, str(tmp_path / "old.png"))

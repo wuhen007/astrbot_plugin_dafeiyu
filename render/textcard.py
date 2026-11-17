@@ -96,6 +96,7 @@ def _md_panel_lines(result) -> List[str]:
         f"洁净 {bar(d['clean'])} {d['clean']}",
         f"活力 {bar(d['energy'])} {d['energy']}",
     ]
+    lines.extend(result.lines[1:])
     if d.get("exp_need"):
         lines.append(f"成长 Lv.{d['level']} · 经验 {d['exp_cur']}/{d['exp_need']}")
     else:

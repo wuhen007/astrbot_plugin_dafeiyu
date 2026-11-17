@@ -7,7 +7,7 @@
   QQ action.type=2——点击后由客户端以用户身份发送指令文本（群里可见，
   与原版一致），不再触发其它插件的 catch-all 回调
 - 贴图/鱼图直接发原图，不做背景合成；按钮交互事件一律不发图
-- 名号：首次照料/看面板时引导，直接回复昵称文本即可登记（_pending +
+- 名号：优先采用平台昵称，未收到时引导，直接回复昵称文本即可登记（_pending +
   ALL 消息监听器），也可用「养鱼 昵称 名字」/「养鱼 跳过」
 """
 from __future__ import annotations
@@ -31,6 +31,8 @@ if str(PLUGIN_DIR) not in sys.path:
 from game import COMMANDS, GameConfig, JsonStore, load_or_create          # noqa: E402
 from render import (                                                      # noqa: E402
     render_card_png, render_fish_png, render_markdown, render_plain)
+from render.fishimg import render_memorial_png
+from game.decorations import completed
 from render import stickers as sticker_src                                # noqa: E402
 from render.textcard import delta_line                                    # noqa: E402
 
@@ -41,8 +43,8 @@ import inspect as _inspect                                                # noqa
 if "scene" not in _inspect.signature(render_card_png).parameters:
     raise RuntimeError(
         "[肥鱼养成记] 插件文件不完整（检测到旧版 render/fishimg.py）。"
-        "请在本插件目录执行：git fetch && git reset --hard origin/main && git clean -fdx "
-        "然后重载插件。不要使用 WebUI 的「更新」按钮（会半更新）。")
+        "请备份存档后，从仓库下载完整插件文件并覆盖安装，随后重载插件。"
+        "请确认 main.py、game/ 和 render/ 来自同一版本。")
 
 # ---------------------------------------------------------------- 版本兼容层
 _button_dec = None
@@ -88,17 +90,36 @@ _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 # ---------------------------------------------------------------- 常量
 _ACTION_KEYS = ("投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "排行", "排行榜",
                 "档案", "图鉴", "出栏", "再养一条", "昵称", "改名", "帮助",
-                "签到", "打卡", "钓鱼", "救援", "许愿")
+                "签到", "打卡", "钓鱼", "救援", "许愿", "小游戏", "猜鱼", "寻宝", "奇遇", "心愿", "纪念物", "建设", "装修", "纪念册", "合影", "运动会", "性格", "委托", "周报")
 _BASE_CMDS = set(_ACTION_KEYS) | {"养鱼"}
 # 别名 = 子指令 ∪ 主指令「养鱼」∪ /、# 前缀变体（QQ 官方用户习惯 /指令）
 _ALIAS_NAMES = _BASE_CMDS | {f"{p}{k}" for k in _BASE_CMDS for p in ("/", "#")}
 _ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排行榜|档案|图鉴|出栏"
-                        "|再养一条|昵称|改名|签到|打卡|钓鱼|救援|许愿|帮助)")
+                        "|再养一条|昵称|改名|签到|打卡|钓鱼|救援|许愿|小游戏|猜鱼|寻宝|奇遇|心愿|纪念物|建设|装修|纪念册|合影|运动会|性格|委托|周报|帮助)")
 _NICK_ARG_RE = re.compile("(?:昵称|改名)\\s*(.+)$")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
 _NICK_TTL = 180.0          # 登记引导的有效期（秒），过期重新引导
 _NICK_MAX = 12
+
+
+def _sender_name(event) -> str:
+    """读取 QQ 新昵称字段，兼容 SDK 对象和保留的原始字典。"""
+    def field(value, key):
+        return value.get(key) if isinstance(value, dict) else getattr(value, key, None)
+
+    raw = getattr(getattr(event, "message_obj", None), "raw_message", None)
+    payload = field(raw, "raw_data")
+    authors = (field(payload, "author"), field(raw, "author"))
+    # SDK 可能丢弃新字段，优先查保留下来的原始载荷；只读发送者，不读 mentions。
+    for key in ("member_nickname", "username"):
+        for author in authors:
+            name = field(author, key)
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    return (event.get_sender_name() or "").strip()
+
+
 _DIFF_SCALE = {"休闲": 0.7, "标准": 1.0, "硬核": 1.4}
 _BTN_TIMEOUT = 86400       # 指令按钮无过期需求，给足 24h；fallback_text 兜底
 _LABEL_MAX = 16
@@ -215,7 +236,7 @@ def _make_yangyu_decorator():
 
 
 @register("astrbot_plugin_dafeiyu", "wuhen007",
-          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", "v1.1.0")
+          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", "2.0")
 class DaFeiYuPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         self.context = context
@@ -393,7 +414,7 @@ class DaFeiYuPlugin(Star):
     async def _dispatch(self, event, command: str, arg=None):
         try:
             uid = str(event.get_sender_id() or "anon")
-            name = (event.get_sender_name() or "").strip()   # 为空时引擎引导登记名号
+            name = _sender_name(event)   # 未收到昵称时引导登记名号
             session = event.unified_msg_origin
             lock = self._locks.setdefault(session, asyncio.Lock())
             async with lock:
@@ -402,15 +423,26 @@ class DaFeiYuPlugin(Star):
             if result.event == "need_nick":
                 # 引导免费文本回昵称（180s 内的下一条非指令消息即登记）
                 self._pending[(session, uid)] = time.time() + _NICK_TTL
+            elif pond.state.users.get(uid) and pond.state.users[uid].nick_set:
+                self._pending.pop((session, uid), None)
             # ① 贴图原图直发（不合成背景）；交互事件不发图
             if self._send_image and Image is not None \
                     and event.get_button_interaction() is None:
                 try:
-                    custom = await asyncio.to_thread(self._get_sticker, result, pond)
-                    if custom is None:
-                        custom = self._pick_custom_img()
-                    if custom is None:
-                        custom = await asyncio.to_thread(self._fallback_fish, session, pond)
+                    image_key = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
+                    if result.data.get("memorial"):
+                        custom = await asyncio.to_thread(render_memorial_png, result.data["memorial"],
+                                                         str(self._image_dir / f"{image_key}-memorial.png"), pond.cfg)
+                    else:
+                        custom = await asyncio.to_thread(self._get_sticker, result, pond)
+                        if custom is None:
+                            custom = self._pick_custom_img()
+                        if completed(pond.state.decorations):
+                            custom = await asyncio.to_thread(render_card_png, pond.state,
+                                ["大家共建的鱼塘：" + "、".join(completed(pond.state.decorations))],
+                                str(self._image_dir / f"{image_key}-decor.png"), pond.cfg, custom)
+                        elif custom is None:
+                            custom = await asyncio.to_thread(self._fallback_fish, session, pond)
                     if custom:
                         yield event.image_result(custom)
                 except Exception as e:
@@ -438,6 +470,8 @@ class DaFeiYuPlugin(Star):
             if sub in ("昵称", "改名"):
                 m2 = _NICK_ARG_RE.search(text)
                 arg = m2.group(1).strip() if m2 else None
+            elif sub in ("猜鱼", "寻宝", "奇遇", "建设", "装修", "纪念册", "合影", "运动会", "性格", "委托", "周报"):
+                arg = text[act.end():].strip() or None
         async for res in self._dispatch(event, sub, arg):
             yield res
 

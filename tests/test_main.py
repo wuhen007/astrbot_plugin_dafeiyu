@@ -395,3 +395,151 @@ def test_panel_nick_gate(plugin):
     kb = results[-1]
     assert any("昵称" in t for t in _texts(kb))  # 面板先问名字
     assert p._pending[("test:GroupMessage:1", "u1")] > 0
+
+
+@pytest.mark.parametrize("prefix", ["", "/", "#", "/养鱼 "])
+def test_guess_text_command_and_argument(plugin, prefix):
+    main, p, tmp = plugin
+    _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "猜鱼"))))
+    state = _saved_state(tmp)
+    answer = state["pending_guess"]["u1"]["hidden"]
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + f"猜鱼 {answer}"))))
+    assert any("猜中了" in text for text in _texts(results[-1]))
+    assert not _saved_state(tmp)["pending_guess"]
+
+
+def test_treasure_button_argument_and_menu(plugin):
+    main, p, tmp = plugin
+    _run(_gather(p.cmd_yangyu(FakeEvent(message_str="/寻宝"))))
+    inter = types.SimpleNamespace(action_id="dfy:寻宝|探路|接力", data={"cmd": "/养鱼 寻宝 探路",
+                                 "act": "寻宝", "arg": "探路"})
+    results = _run(_gather(p.on_button(FakeEvent(interaction=inter))))
+    assert any("完成了探路" in text for text in _texts(results[-1]))
+    assert "u1" in _saved_state(tmp)["pending_treasure"]["got"]
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str="/小游戏"))))
+    assert any("猜鱼" in text for text in _texts(results[-1]))
+
+
+@pytest.mark.parametrize("raw", [
+    {"author": {"member_nickname": " 群昵称 ", "username": "QQ昵称"}},
+    types.SimpleNamespace(author=types.SimpleNamespace(member_nickname="群昵称", username="QQ昵称")),
+    types.SimpleNamespace(raw_data={"author": {"member_nickname": "群昵称"}},
+                          author=types.SimpleNamespace(username="QQ昵称")),
+])
+def test_qq_group_nickname_auto_registers(plugin, raw):
+    main, p, tmp = plugin
+    ev = FakeEvent(name="", message_str="投喂")
+    ev.message_obj = types.SimpleNamespace(raw_message=raw)
+    results = _run(_gather(p._dispatch(ev, "投喂")))
+    assert any("饱腹" in text for text in _texts(results[-1]))
+    user = _saved_state(tmp)["users"]["u1"]
+    assert user["nick_set"] and user["display_name"] == "群昵称"
+    assert not p._pending
+
+
+def test_qq_c2c_name_fallback_and_manual_name(plugin):
+    main, p, tmp = plugin
+    ev = FakeEvent(name="")
+    ev.message_obj = types.SimpleNamespace(raw_message={"author": {"username": "QQ昵称"}})
+    assert main._sender_name(ev) == "QQ昵称"
+    _run(_gather(p._dispatch(ev, "养鱼")))
+    assert _saved_state(tmp)["users"]["u1"]["display_name"] == "QQ昵称"
+    _run(_gather(p._dispatch(ev, "昵称", "小鱼友")))
+    _run(_gather(p._dispatch(ev, "养鱼")))
+    assert _saved_state(tmp)["users"]["u1"]["display_name"] == "小鱼友"
+    ev.message_obj.raw_message = {"author": {"username": None, "member_nickname": " "},
+                                  "mentions": [{"member_nickname": "别人的昵称"}]}
+    assert main._sender_name(ev) == ""
+    ev._name = "框架昵称"
+    assert main._sender_name(ev) == "框架昵称"
+
+
+def test_new_nickname_clears_pending_prompt(plugin):
+    main, p, tmp = plugin
+    ev = FakeEvent(name="")
+    _run(_gather(p._dispatch(ev, "养鱼")))
+    assert p._pending
+    ev.message_obj = types.SimpleNamespace(raw_message={"author": {"member_nickname": "新昵称"}})
+    _run(_gather(p._dispatch(ev, "养鱼")))
+    assert not p._pending
+    assert _saved_state(tmp)["users"]["u1"]["display_name"] == "新昵称"
+
+
+@pytest.mark.parametrize("prefix", ["", "/", "#", "/养鱼 "])
+def test_adventure_text_choice_and_new_commands(plugin, prefix):
+    main, p, tmp = plugin
+    _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "奇遇"))))
+    game = _saved_state(tmp)["pending_adventure"]
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "奇遇 帮忙@" + game["token"]))))
+    assert any("纪念物" in text for text in _texts(results[-1]))
+    assert _saved_state(tmp)["pending_adventure"] is None
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "纪念物"))))
+    assert any("×1" in text for text in _texts(results[-1]))
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "心愿"))))
+    assert any("今日小心愿" in text for text in _texts(results[-1]))
+
+
+def test_adventure_button_roundtrip(plugin):
+    main, p, tmp = plugin
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str="/奇遇"))))
+    button = _rows(results[-1], main)[0].buttons[0]
+    data = button.action.data
+    assert data["act"] == "奇遇" and data["arg"].startswith("帮忙@")
+    inter = types.SimpleNamespace(action_id=button.id, data=data)
+    results = _run(_gather(p.on_button(FakeEvent(interaction=inter))))
+    assert any("奇遇归来" in text for text in _texts(results[-1]))
+    assert _saved_state(tmp)["users"]["u1"]["keepsakes"]
+
+
+@pytest.mark.parametrize("prefix", ["", "/", "#", "/养鱼 "])
+def test_build_text_and_button_arguments(plugin, prefix):
+    main, p, tmp = plugin
+    event = FakeEvent(message_str=prefix + "建设")
+    results = _run(_gather(p.cmd_yangyu(event)))
+    pond = p._get_pond(event)
+    pond.state.users["u1"].materials = 5
+    button = _rows(results[-1], main)[0].buttons[0]
+    assert button.action.data["arg"] == "水草角"
+    inter = types.SimpleNamespace(action_id=button.id, data=button.action.data)
+    _run(_gather(p.on_button(FakeEvent(interaction=inter))))
+    assert _saved_state(tmp)["decorations"]["水草角"]["u1"] == 1
+    for _ in range(4):
+        _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "装修 水草角"))))
+    assert pond.state.users["u1"].materials == 0
+    assert _saved_state(tmp)["decorations"]["水草角"]["u1"] == 5
+    pond.state.fish.exp, pond.state.fish.weight, pond.state.fish.mood = 600, 90, 80
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "出栏"))))
+    assert len(results) == 2  # includes graduation photo
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "合影 1"))))
+    assert any("鱼塘纪念册" in t for t in _texts(results[-1]))
+    assert len(results) == 2
+
+
+@pytest.mark.parametrize("prefix", ["", "/", "#", "/养鱼 "])
+def test_sports_strategy_button_roundtrip(plugin, prefix):
+    main, p, tmp = plugin
+    result = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "运动会 冲刺"))))
+    button = _rows(result[-1], main)[0].buttons[2]
+    assert "爆发" in button.action.data["arg"]
+    inter = types.SimpleNamespace(action_id=button.id, data=button.action.data)
+    _run(_gather(p.on_button(FakeEvent(interaction=inter))))
+    assert _saved_state(tmp)["users"]["u1"]["sports_badges"] == 1
+    _run(_gather(p.on_button(FakeEvent(interaction=inter))))
+    assert _saved_state(tmp)["users"]["u1"]["sports_badges"] == 1
+    result = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "性格"))))
+    assert any("性格" in text for text in _texts(result[-1]))
+
+
+@pytest.mark.parametrize("prefix", ["", "/", "#", "/养鱼 "])
+def test_weekly_commands_and_care_button(plugin, prefix):
+    main, p, tmp = plugin
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "委托"))))
+    assert any("每周鱼塘委托" in t for t in _texts(results[-1]))
+    button = _rows(results[-1], main)[0].buttons[0]
+    inter = types.SimpleNamespace(action_id=button.id, data=button.action.data)
+    _run(_gather(p.on_button(FakeEvent(interaction=inter))))
+    assert _saved_state(tmp)["weekly_quest"]["progress"]["food"] == 1
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "周报"))))
+    assert any("鱼塘周报" in t for t in _texts(results[-1]))
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "小游戏"))))
+    assert len(_rows(results[-1], main)) <= 5

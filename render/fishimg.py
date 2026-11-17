@@ -81,6 +81,18 @@ def render_card_png(state, lines, out_path, config=None, custom_img=None,
     rng = random.Random(int(fish.satiety * 7 + fish.mood * 13
                             + fish.clean * 29 + fish.weight * 3))
     lines = [str(x).strip() for x in (lines or []) if str(x).strip()]
+    font_title, font_s = _load_font(24), _load_font(20)
+    wrapped = []
+    for i, text in enumerate(lines):
+        font = font_title if i == 0 else font_s
+        line = ""
+        for char in _safe_text(text):
+            if font and line and font.getlength(line + char) > _W - 40:
+                wrapped.append(line)
+                line = ""
+            line += char
+        wrapped.append(line)
+    lines = wrapped
 
     panel_h = 14 + (len(lines) * 30 + 6 if lines else 0) + 10
     H = panel_h + (_SCENE_H if scene else 0)
@@ -128,6 +140,7 @@ def _draw_scene(d, img, state, rng, cfg, y_off, custom_img):
         for _ in range(int((30 - fish.clean) / 6) + 2):
             x, y = rng.randint(30, _W - 30), rng.randint(H - 110, H - 40)
             d.ellipse((x - 6, y - 4, x + 6, y + 4), fill=(105, 88, 58, 255))
+    _draw_decorations(d, state.decorations, H)
     if state.end_reason == "runaway":
         _draw_sign(d, y_off)
     else:
@@ -242,3 +255,36 @@ def _draw_sign(d, y_off):
     for i in range(4):
         bx, by, r = 430 + i * 30, y_off + 40 - i * 22, max(2, 8 - i)
         d.ellipse((bx - r, by - r, bx + r, by + r), outline=(240, 250, 255, 255), width=2)
+
+
+def _draw_decorations(d, decorations, bottom):
+    from game.decorations import completed
+    built = completed(decorations)
+    if "水草角" in built:
+        for x, height in ((42, 90), (62, 120), (82, 74), (102, 102)):
+            d.line([(x, bottom - 25), (x - 12, bottom - height // 2), (x + 5, bottom - height)],
+                   fill=(65, 194, 119, 255), width=9)
+            d.ellipse((x - 25, bottom - height // 2 - 12, x, bottom - height // 2), fill=(103, 221, 137, 255))
+    if "贝壳小屋" in built:
+        x, y = 510, bottom - 34
+        d.pieslice((x - 65, y - 96, x + 65, y + 24), 180, 360,
+                   fill=(255, 205, 197, 255), outline=(206, 128, 140, 255), width=4)
+        for dx in (-42, -21, 0, 21, 42):
+            d.line((x, y + 3, x + dx, y - 52), fill=(220, 157, 158, 255), width=3)
+        d.rounded_rectangle((x - 14, y - 27, x + 14, y + 6), radius=12, fill=(87, 91, 129, 255))
+    if "月亮灯" in built:
+        d.line((564, bottom - 35, 564, bottom - 252), fill=(230, 214, 169, 255), width=5)
+        d.line((564, bottom - 252, 528, bottom - 252), fill=(230, 214, 169, 255), width=5)
+        d.ellipse((502, bottom - 250, 548, bottom - 204), fill=(255, 235, 143, 255))
+        d.ellipse((519, bottom - 252, 550, bottom - 220), fill=(71, 145, 195, 255))
+
+
+def render_memorial_png(page, out_path, config=None):
+    from game.engine import memorial_lines
+    from game.state import FishState, PondState
+    snapshot = page.get("memorial")
+    if snapshot is None:
+        return render_card_png(PondState(), ["鱼塘纪念册", *memorial_lines(page)], out_path, scene=False)
+    state = PondState(fish=FishState.from_dict(snapshot["fish"]),
+                      end_reason=page.get("reason"), decorations=snapshot["decorations"])
+    return render_card_png(state, ["鱼塘纪念册", *memorial_lines(page)], out_path, config=config)
