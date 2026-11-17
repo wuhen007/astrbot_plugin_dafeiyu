@@ -543,3 +543,45 @@ def test_weekly_commands_and_care_button(plugin, prefix):
     assert any("鱼塘周报" in t for t in _texts(results[-1]))
     results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "小游戏"))))
     assert len(_rows(results[-1], main)) <= 5
+
+
+@pytest.mark.parametrize("markdown", [True, False])
+@pytest.mark.parametrize("command", ["养鱼", "小游戏", "猜鱼", "奇遇", "寻宝", "心愿", "建设", "运动会", "委托"])
+def test_reply_format_marker_preserves_all_cards(plugin, markdown, command):
+    main, p, tmp = plugin
+    p._md_mode = markdown
+    p._send_image = False
+    extra = {}
+    event = FakeEvent(message_str="/养鱼 " + command)
+    event.set_extra = lambda key, value: extra.__setitem__(key, value)
+    results = _run(_gather(p.cmd_yangyu(event)))
+    assert extra.get("reply_keep_format") is True
+    original = "".join(_texts(results[-1]))
+    # Replay the consumer contract: unmarked replies are flattened.
+    def single_line_reply(text, metadata):
+        return text if metadata.get("reply_keep_format") else " ".join(text.split())
+    assert "\n" in original
+    assert single_line_reply(original, extra) == original
+    assert "\n" not in single_line_reply(original, {})
+
+
+def test_callback_sets_keep_format_marker(plugin):
+    main, p, tmp = plugin
+    extra = {}
+    inter = types.SimpleNamespace(action_id="dfy:猜鱼||猜鱼", data={"cmd": "/养鱼 猜鱼"})
+    event = FakeEvent(interaction=inter)
+    event.set_extra = lambda key, value: extra.__setitem__(key, value)
+    results = _run(_gather(p.on_button(event)))
+    assert extra["reply_keep_format"] is True
+    assert len(_rows(results[-1], main)) > 0
+    assert "  \n" in "".join(_texts(results[-1]))
+
+
+def test_compact_markdown_keeps_lines_without_empty_paragraphs(plugin):
+    main, p, tmp = plugin
+    assert main.md_text("标题\n\n第一条\n第二条\n") == "标题  \n第一条  \n第二条"
+    results = _run(_gather(p._dispatch(FakeEvent(), "心愿")))
+    text = "".join(_texts(results[-1]))
+    assert "  \n" in text
+    assert "\n\n" not in text
+    assert "有效照料自动推进" in text

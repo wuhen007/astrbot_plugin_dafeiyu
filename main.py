@@ -2,7 +2,7 @@
 
 发送模式（与 zhutian/实测可用实现对齐）：
 - 「md 文本卡 + 指令按钮」：Plain(_md(text)) + ActionRow(Button...) +
-  use_markdown(True)；_md 把每行变成独立段落（QQ md 单 \n 不换行）
+  use_markdown(True)；_md 用硬换行保留文字分行
 - 指令按钮：对 qqofficial 适配器 _parse_keyboard 挂补丁，把回调按钮改写为
   QQ action.type=2——点击后由客户端以用户身份发送指令文本（群里可见，
   与原版一致），不再触发其它插件的 catch-all 回调
@@ -134,8 +134,8 @@ logger.info("[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰
 
 
 def md_text(text: str) -> str:
-    """QQ 原生 md 把单换行当空格：每行非空行变成独立段落（\\n\\n 连接）。"""
-    return "\n\n".join(ln.strip() for ln in str(text or "").split("\n") if ln.strip())
+    """用 Markdown 硬换行保留分行，不额外插入空段落。"""
+    return "  \n".join(line.strip() for line in str(text or "").splitlines() if line.strip())
 
 
 def _default_data_dir() -> Path:
@@ -236,7 +236,7 @@ def _make_yangyu_decorator():
 
 
 @register("astrbot_plugin_dafeiyu", "wuhen007",
-          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", "2.0")
+          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", "2.0.0")
 class DaFeiYuPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         self.context = context
@@ -396,9 +396,12 @@ class DaFeiYuPlugin(Star):
 
     def _build_result(self, event, result):
         """「多行文本卡 + 指令按钮」：markdown 模式且有按钮组件走 msg_type=2
-        （_md 把每行变成独立段落）；否则纯文本全量卡片（\\n 原生换行）。
-        排版前提：服务器 single_line 插件放行（command_prefixes 含 / 或 养鱼）。
+        （_md 保留硬换行，不插入空段落）；否则纯文本全量卡片（\\n 原生换行）。
         有真按钮时不再输出 [按钮] 提示行（避免重复暴露）。"""
+        # dafeiyu_suite 的 single_line_reply 读取此标记后保留换行。
+        set_extra = getattr(event, "set_extra", None)
+        if set_extra:
+            set_extra("reply_keep_format", True)
         rows = self._build_rows(result) if self._md_mode else []
         if rows:
             text = "\n".join(ln for ln in render_markdown(result).split("\n")
@@ -447,7 +450,7 @@ class DaFeiYuPlugin(Star):
                         yield event.image_result(custom)
                 except Exception as e:
                     logger.warning(f"[肥鱼养成记] 发图失败，跳过：{e}")
-            # ② 多行文本卡 + 指令按钮（排版依赖 single_line 配置放行，见 README）
+            # ② 文字卡片和原生按钮。
             yield self._build_result(event, result)
         except Exception as e:
             logger.exception("[肥鱼养成记] 处理指令 %r 失败", command)

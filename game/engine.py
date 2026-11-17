@@ -1012,14 +1012,19 @@ class Pond:
         if gate is not None:
             return gate
         g, t = self.cfg.guess, self.cfg.treasure
-        lines = [f"🐟 猜鱼心思：每人独立猜 1～10，{g.attempts} 次机会；开局耗 {g.energy_cost:g} 活力，冷却 {g.cooldown_min} 分钟。",
-                 f"🗺 合力寻宝：三位不同鱼友依次探路、搬石、开箱，{t.expire_min} 分钟内完成；全塘冷却 {t.cooldown_min} 分钟。"]
-        lines.extend(["🌊 鱼塘奇遇：每天每人一次，帮忙或探索收集纪念物，还有后续小故事。",
-                      "🏡 共建鱼塘：心愿和奇遇获得材料，建设永久装饰；纪念册保存每轮合影。",
-                      "🏁 鱼塘运动会：每周每人选一项，成绩和纪念奖章会留在本周记录。",
-                      "🐟 肥鱼性格：由这一轮的照料习惯自然形成，不影响数值。",
-                      "📋 每周委托：照料自动累计，按小群档位固定目标，完成领取材料和纪念章。",
-                      "💭 今日心愿：大家正常照料就能推进，不用同时在线；纪念物可查看个人收藏。"])
+        lines = [
+            f"猜鱼心思｜猜1～10，{g.attempts}次机会，冷却{g.cooldown_min}分钟。",
+            f"合力寻宝｜三人接力探路、搬石、开箱，{t.expire_min}分钟内完成。",
+            "鱼塘奇遇｜每天每人一次，选择路线，带回故事与纪念物。",
+            "今日心愿｜正常照料就能共同完成，每天一个小目标。",
+            "纪念物｜查看个人收藏，换鱼后继续保留。",
+            "共建鱼塘｜捐材料建装饰，让大家的鱼塘慢慢变样。",
+            "纪念册｜收藏每一轮合影，回看鱼友们的陪伴。",
+            "运动会｜每周选项目和策略参赛，也能每日助威。",
+            "肥鱼性格｜照料习惯养出不同性格，仅影响描述。",
+            "每周委托｜平时照料累计进度，完成获得材料和纪念章。",
+            "历期周报｜回顾最近八期完成记录与贡献者署名。",
+        ]
         if self.state.pending_treasure:
             lines.append(f"寻宝接力进行中：已完成 {len(self.state.pending_treasure['got'])}/3 步，快来搭把手！")
         return ActionResult(title="鱼塘小游戏", lines=lines, buttons=[
@@ -1212,8 +1217,12 @@ class Pond:
                     "left": cfg.attempts, "expires": self.clock() + cfg.expire_min * 60}
             self.state.pending_guess[uid] = game
             return ActionResult(event="game_open", title="猜鱼心思", lines=[
-                f"它偷偷想了一个 1～10 的数字！{cfg.attempts} 次机会，{cfg.expire_min} 分钟内发「猜鱼 数字」。",
-                f"猜错会提示大了还是小了；猜中海苔片 +{cfg.reward_snacks}、心情 +{cfg.mood_win:g}，机会用完心情 +{cfg.mood_miss:g}。"],
+                "它偷偷想了一个 1～10 的数字！",
+                f"机会：{cfg.attempts}次 · 时限：{cfg.expire_min}分钟",
+                "操作：点数字按钮，或发送「猜鱼 数字」。",
+                "提示：猜错会告诉你大了还是小了。",
+                f"猜中：海苔片 +{cfg.reward_snacks}、心情 +{cfg.mood_win:g}",
+                f"机会用完：心情 +{cfg.mood_miss:g}"],
                 deltas={"活力": -cfg.energy_cost}, buttons=self._guess_buttons(game))
         if not game:
             return ActionResult(ok=False, title="没有开局", lines=["先发「猜鱼」开局；超时的游戏已结束。"],

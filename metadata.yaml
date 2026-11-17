@@ -1,5 +1,5 @@
 name: astrbot_plugin_dafeiyu
 desc: 肥鱼养成记 —— 全群一起养鱼，探索奇遇、共建鱼塘，留下每一轮的毕业回忆。
-version: "2.0"
+version: "2.0.0"
 author: wuhen007
 repo: https://github.com/wuhen007/astrbot_plugin_dafeiyu
