@@ -100,6 +100,7 @@ _NICK_ARG_RE = re.compile("(?:昵称|改名)\\s*(.+)$")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
 _NICK_TTL = 180.0          # 登记引导的有效期（秒），过期重新引导
+_NICK_CLEAN_INTERVAL = 60.0
 _NICK_MAX = 12
 _POND_CACHE_MAX = 200
 
@@ -270,6 +271,7 @@ class DaFeiYuPlugin(Star):
         self._pond_cache_lock = threading.Lock()
         self._locks = WeakValueDictionary()
         self._pending = {}      # (session, uid) -> 登记引导截止时刻
+        self._pending_cleanup_at = 0.0
         logger.info("[肥鱼养成记] 已加载：输出=%s 画图=%s 贴图=%s 难度=%s 存档=%s",
                     "markdown" if self._md_mode else "text", self._send_image,
                     self._sticker_enabled, raw.get("difficulty", "标准"), data_dir)
@@ -339,6 +341,8 @@ class DaFeiYuPlugin(Star):
     def _get_sticker(self, result, pond: Pond):
         """按指令/状态从贴图站挑一张；优先复用本地已缓存的贴图（减轻素材站
         压力），挑选种子与状态绑定：同一状态稳定命中同一张。"""
+        if not self._sticker_enabled:
+            return None
         try:
             key = self._sticker_key(result)
             tags, kws = self._STICKER_MAP.get(key, self._STICKER_MAP["panel"])
@@ -438,7 +442,12 @@ class DaFeiYuPlugin(Star):
                 result = await asyncio.to_thread(pond.handle, uid, name, command, arg)
             if result.event == "need_nick":
                 # 引导免费文本回昵称（180s 内的下一条非指令消息即登记）
-                self._pending[(session, uid)] = time.time() + _NICK_TTL
+                now = time.time()
+                if now >= self._pending_cleanup_at:
+                    self._pending = {key: deadline for key, deadline in self._pending.items()
+                                     if deadline > now}
+                    self._pending_cleanup_at = now + _NICK_CLEAN_INTERVAL
+                self._pending[(session, uid)] = now + _NICK_TTL
             elif pond.state.users.get(uid) and pond.state.users[uid].nick_set:
                 self._pending.pop((session, uid), None)
             # ① 贴图原图直发（不合成背景）；交互事件不发图

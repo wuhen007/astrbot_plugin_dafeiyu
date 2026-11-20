@@ -46,7 +46,7 @@ def test_download_writes_manifest_and_skips_network(tmp_path, monkeypatch):
     Image.new("RGB", (20, 20), (5, 5, 5)).save(buf, "PNG")
     calls = []
     monkeypatch.setattr(stickers, "_http_get",
-                        lambda url, timeout=20: (calls.append(url), buf.getvalue())[1])
+                        lambda url, **kwargs: (calls.append(url), buf.getvalue())[1])
     s = {"large": "https://x/a.png"}
     manifest = {}
     out = stickers.download_sticker(s, tmp_path, manifest=manifest)
@@ -73,15 +73,26 @@ def test_load_index_stale_cache_fallback(tmp_path, monkeypatch):
     old = time.time() - stickers.INDEX_TTL - 10
     os.utime(p, (old, old))                       # 缓存过期
     monkeypatch.setattr(stickers, "_http_get",
-                        lambda url, timeout=12: (_ for _ in ()).throw(OSError("net down")))
+                        lambda url, **kwargs: (_ for _ in ()).throw(OSError("net down")))
     st = stickers.load_index(tmp_path, "https://invalid.invalid/index.json")
     assert st and st[0]["large"] == "https://x/1.webp"   # 联网失败回退旧缓存
 
 
 def test_load_index_total_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(stickers, "_http_get",
-                        lambda url, timeout=12: (_ for _ in ()).throw(OSError("net down")))
+                        lambda url, **kwargs: (_ for _ in ()).throw(OSError("net down")))
     assert stickers.load_index(tmp_path, "https://invalid.invalid/index.json") is None
+
+
+def test_http_get_rejects_oversized_response(monkeypatch):
+    monkeypatch.setattr(stickers.urllib.request, "urlopen",
+                        lambda *args, **kwargs: io.BytesIO(b"12345"))
+    try:
+        stickers._http_get("https://x/image.png", max_bytes=4)
+    except ValueError as exc:
+        assert "大小限制" in str(exc)
+    else:
+        raise AssertionError("oversized response should be rejected")
 
 
 def test_download_sticker_converts_webp_to_png(tmp_path, monkeypatch):
@@ -89,7 +100,7 @@ def test_download_sticker_converts_webp_to_png(tmp_path, monkeypatch):
     from PIL import Image
     buf = io.BytesIO()
     Image.new("RGBA", (40, 30), (10, 20, 30, 200)).save(buf, "WEBP")
-    monkeypatch.setattr(stickers, "_http_get", lambda url, timeout=20: buf.getvalue())
+    monkeypatch.setattr(stickers, "_http_get", lambda url, **kwargs: buf.getvalue())
     s = {"large": "https://x/large.webp"}
     out = stickers.download_sticker(s, tmp_path / "img")
     assert out and Path(out).suffix == ".png"
@@ -103,7 +114,7 @@ def test_download_sticker_keeps_gif(tmp_path, monkeypatch):
     from PIL import Image
     buf = io.BytesIO()
     Image.new("P", (20, 20), 3).save(buf, "GIF")
-    monkeypatch.setattr(stickers, "_http_get", lambda url, timeout=20: buf.getvalue())
+    monkeypatch.setattr(stickers, "_http_get", lambda url, **kwargs: buf.getvalue())
     s = {"large": "https://x/anim.gif"}
     out = stickers.download_sticker(s, tmp_path / "img")
     assert Path(out).suffix == ".gif"          # gif 受支持，保留动画

@@ -9,6 +9,7 @@ import json
 import logging
 import sys
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -243,6 +244,15 @@ def test_nickname_listener_ignores_commands(plugin):
     assert ("test:GroupMessage:1", "u1") in p._pending   # 引导仍挂起
 
 
+def test_nickname_prompt_sweep_removes_expired_entries(plugin):
+    main, p, tmp = plugin
+    p._pending[("old-session", "old-user")] = time.time() - 1
+    p._pending_cleanup_at = 0
+    _run(_gather(p._dispatch(FakeEvent(name=""), "养鱼")))
+    assert ("old-session", "old-user") not in p._pending
+    assert ("test:GroupMessage:1", "u1") in p._pending
+
+
 def test_button_click_routes_and_skips_image(plugin):
     main, p, tmp = plugin
     inter = types.SimpleNamespace(action_id="dfy:投喂||投喂",
@@ -409,7 +419,7 @@ def test_metadata_is_single_version_source_and_contains_market_fields(plugin):
     main, p, tmp = plugin
     text = (main.PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
     assert f'version: "{main._PLUGIN_VERSION}"' in text
-    assert main._PLUGIN_VERSION == "2.0.1"
+    assert main._PLUGIN_VERSION == "2.0.2"
     assert "display_name:" in text and "support_platforms:" in text
 
 
@@ -418,6 +428,18 @@ def test_missing_custom_image_directory_is_a_normal_fallback(plugin, caplog, tmp
     p._custom_img_dir = tmp_path / "missing-fish-images"
     assert p._pick_custom_img() is None
     assert not any("自定义鱼图读取失败" in record.message for record in caplog.records)
+
+
+def test_disabled_sticker_source_does_not_fetch_index(plugin, monkeypatch):
+    main, p, tmp = plugin
+    p._sticker_enabled = False
+
+    def unexpected_request(*args, **kwargs):
+        raise AssertionError("disabled sticker source must not make requests")
+
+    monkeypatch.setattr(main.sticker_src, "load_index", unexpected_request)
+    result = types.SimpleNamespace(event="message", title="投喂")
+    assert p._get_sticker(result, None) is None
 
 
 def test_markdown_filter_only_removes_button_hint_line(plugin):

@@ -15,6 +15,8 @@ import urllib.request
 from pathlib import Path
 
 INDEX_TTL = 24 * 3600     # 索引缓存 24 小时（减少对素材站的请求）
+MAX_INDEX_BYTES = 2 * 1024 * 1024
+MAX_STICKER_BYTES = 10 * 1024 * 1024
 UA = "astrbot_plugin_dafeiyu (+https://github.com/wuhen007/astrbot_plugin_dafeiyu)"
 _FISH_MARKS = ("鱼", "鲸鱼", "肥鱼")   # alt 含这些字样的优先（蓝色大肥鱼本尊）
 # QQ 官方富媒体支持的格式；webp 会被拒（错误 850019 富媒体文件格式不支持）
@@ -37,10 +39,13 @@ def save_manifest(cache_dir, manifest: dict) -> None:
     tmp.replace(p)
 
 
-def _http_get(url: str, timeout: int = 12) -> bytes:
+def _http_get(url: str, timeout: int = 12, max_bytes: int = MAX_INDEX_BYTES) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"贴图源响应超过大小限制：{max_bytes} 字节")
+    return data
 
 
 def load_index(cache_dir: Path, url: str, ttl: int = INDEX_TTL):
@@ -50,7 +55,7 @@ def load_index(cache_dir: Path, url: str, ttl: int = INDEX_TTL):
     try:
         if p.exists() and time.time() - p.stat().st_mtime < ttl:
             return json.loads(p.read_text("utf-8")).get("stickers")
-        data = json.loads(_http_get(url).decode("utf-8"))
+        data = json.loads(_http_get(url, max_bytes=MAX_INDEX_BYTES).decode("utf-8"))
         stickers = data.get("stickers") or []
         if stickers:
             tmp = p.with_suffix(".tmp")
@@ -150,7 +155,7 @@ def download_sticker(sticker, cache_dir, manifest=None):
     raw = cache_dir / f"{hashlib.sha1(url.encode('utf-8')).hexdigest()}{ext}"
     if not raw.exists() or raw.stat().st_size == 0:
         try:
-            data = _http_get(url, timeout=20)
+            data = _http_get(url, timeout=20, max_bytes=MAX_STICKER_BYTES)
             tmp = raw.with_suffix(".tmp")
             tmp.write_bytes(data)
             tmp.replace(raw)
