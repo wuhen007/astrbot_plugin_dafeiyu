@@ -17,8 +17,11 @@ import hashlib
 import random
 import re
 import sys
+import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
+from weakref import WeakValueDictionary
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent
@@ -28,17 +31,15 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 if str(PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(PLUGIN_DIR))
 
-from game import COMMANDS, GameConfig, JsonStore, load_or_create          # noqa: E402
-from render import (                                                      # noqa: E402
-    render_card_png, render_fish_png, render_markdown, render_plain)
-from render.fishimg import render_memorial_png
-from game.decorations import completed
-from render import stickers as sticker_src                                # noqa: E402
-from render.textcard import delta_line                                    # noqa: E402
-
 # 文件完整性自检：混入旧版文件（半更新）时立刻报错并给出修复命令，
 # 不允许"静默半残"运行。
-import inspect as _inspect                                                # noqa: E402
+import inspect as _inspect  # noqa: E402
+
+from game import COMMANDS, GameConfig, JsonStore, Pond, load_or_create  # noqa: E402
+from game.decorations import completed
+from render import render_card_png, render_fish_png, render_markdown, render_plain  # noqa: E402
+from render import stickers as sticker_src  # noqa: E402
+from render.fishimg import render_memorial_png
 
 if "scene" not in _inspect.signature(render_card_png).parameters:
     raise RuntimeError(
@@ -49,7 +50,7 @@ if "scene" not in _inspect.signature(render_card_png).parameters:
 # ---------------------------------------------------------------- 版本兼容层
 _button_dec = None
 try:
-    from astrbot.api.event.filter import button_action as _button_dec     # noqa: E402
+    from astrbot.api.event.filter import button_action as _button_dec  # noqa: E402
 except ImportError:
     pass
 
@@ -57,16 +58,16 @@ _command_dec = None
 _emt_dec = None
 _EMT = None
 try:
-    from astrbot.api.event.filter import (                                # noqa: E402
-        EventMessageType as _EMT, event_message_type as _emt_dec)
+    from astrbot.api.event.filter import EventMessageType as _EMT  # noqa: E402
+    from astrbot.api.event.filter import event_message_type as _emt_dec
 except ImportError:
     pass
 _command_dec = None
 try:
-    from astrbot.api.event.filter import command as _command_dec          # noqa: E402
+    from astrbot.api.event.filter import command as _command_dec  # noqa: E402
 except ImportError:
     try:
-        from astrbot.api.event import filter as _v3_filter                # noqa: E402
+        from astrbot.api.event import filter as _v3_filter  # noqa: E402
         _command_dec = _v3_filter.command
     except ImportError:
         pass
@@ -76,7 +77,7 @@ try:
     from astrbot.api.message_components import ActionRow, Button, Image, Plain  # noqa: E402
 except ImportError:
     try:
-        from astrbot.api.message_components import Image, Plain           # noqa: E402
+        from astrbot.api.message_components import Image, Plain  # noqa: E402
     except ImportError:
         pass
 if Button is not None:
@@ -88,19 +89,26 @@ if Button is not None:
 _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 
 # ---------------------------------------------------------------- 常量
-_ACTION_KEYS = ("投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "排行", "排行榜",
-                "档案", "图鉴", "出栏", "再养一条", "昵称", "改名", "帮助",
-                "签到", "打卡", "钓鱼", "救援", "许愿", "小游戏", "猜鱼", "寻宝", "奇遇", "心愿", "纪念物", "建设", "装修", "纪念册", "合影", "运动会", "性格", "委托", "周报")
-_BASE_CMDS = set(_ACTION_KEYS) | {"养鱼"}
-# 别名 = 子指令 ∪ 主指令「养鱼」∪ /、# 前缀变体（QQ 官方用户习惯 /指令）
-_ALIAS_NAMES = _BASE_CMDS | {f"{p}{k}" for k in _BASE_CMDS for p in ("/", "#")}
-_ACTION_RE = re.compile("(投喂|加餐|逗鱼|净水|玩耍|称重|排行|排行榜|档案|图鉴|出栏"
-                        "|再养一条|昵称|改名|签到|打卡|钓鱼|救援|许愿|小游戏|猜鱼|寻宝|奇遇|心愿|纪念物|建设|装修|纪念册|合影|运动会|性格|委托|周报|帮助)")
+_ACTION_KEYS = tuple(sorted((key for key in COMMANDS if key != "养鱼"),
+                            key=len, reverse=True))
+_BASE_CMDS = set(COMMANDS) | {"养鱼"}
+_SAFE_BARE_ALIASES = {"投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "出栏", "再养一条"}
+_ALIAS_NAMES = _SAFE_BARE_ALIASES | {f"{prefix}{key}" for key in _BASE_CMDS
+                                     for prefix in ("/", "#")}
+_ACTION_RE = re.compile("(" + "|".join(re.escape(key) for key in _ACTION_KEYS) + ")")
 _NICK_ARG_RE = re.compile("(?:昵称|改名)\\s*(.+)$")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
 _NICK_TTL = 180.0          # 登记引导的有效期（秒），过期重新引导
 _NICK_MAX = 12
+_POND_CACHE_MAX = 200
+
+_VERSION_MATCH = re.search(
+    r"(?m)^version:\s*[\"']?([^\"'\s]+)",
+    (PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8"))
+if not _VERSION_MATCH:
+    raise RuntimeError("[肥鱼养成记] metadata.yaml 缺少 version")
+_PLUGIN_VERSION = _VERSION_MATCH.group(1)
 
 
 def _sender_name(event) -> str:
@@ -128,11 +136,6 @@ _LABEL_MAX = 16
 _CMD_HEADS = tuple(sorted({f"{p}{k}" for k in _BASE_CMDS for p in ("", "/", "#")},
                           key=len, reverse=True))
 
-logger.info("[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰器=%s 按钮装饰器=%s 昵称监听=%s",
-            _HAS_BUTTONS, _command_dec is not None, _button_dec is not None,
-            _emt_dec is not None)
-
-
 def md_text(text: str) -> str:
     """用 Markdown 硬换行保留分行，不额外插入空段落。"""
     return "  \n".join(line.strip() for line in str(text or "").splitlines() if line.strip())
@@ -146,7 +149,7 @@ def _default_data_dir() -> Path:
             return Path(p)
     except Exception:
         pass
-    return Path("data") / "plugin_data" / "astrbot_plugin_dafeiyu"
+    return PLUGIN_DIR.parent.parent / "plugin_data" / "astrbot_plugin_dafeiyu"
 
 
 def _build_keyboard_locally(rows_components) -> dict:
@@ -185,7 +188,8 @@ def _install_command_button_patch() -> bool:
     database is locked）；链里混有别家回调按钮时走原逻辑（适配器编码 token）。"""
     try:
         from astrbot.core.platform.sources.qqofficial.qqofficial_message_event import (
-            QQOfficialMessageEvent as Target)
+            QQOfficialMessageEvent as Target,
+        )
     except Exception:
         return False
     if getattr(Target, "_dfy_cmd_patched", False):
@@ -236,7 +240,7 @@ def _make_yangyu_decorator():
 
 
 @register("astrbot_plugin_dafeiyu", "wuhen007",
-          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", "2.0.0")
+          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", _PLUGIN_VERSION)
 class DaFeiYuPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         self.context = context
@@ -262,8 +266,9 @@ class DaFeiYuPlugin(Star):
         self._sticker_api = raw.get("sticker_api", "https://fisharchive.cc/stickers/index.json")
         self._sticker_dir = data_dir / "stickers"
         self._sticker_warned = False
-        self._ponds = {}
-        self._locks = {}
+        self._ponds = OrderedDict()
+        self._pond_cache_lock = threading.Lock()
+        self._locks = WeakValueDictionary()
         self._pending = {}      # (session, uid) -> 登记引导截止时刻
         logger.info("[肥鱼养成记] 已加载：输出=%s 画图=%s 贴图=%s 难度=%s 存档=%s",
                     "markdown" if self._md_mode else "text", self._send_image,
@@ -275,15 +280,21 @@ class DaFeiYuPlugin(Star):
     # ------------------------------------------------------------ 内部
     def _get_pond(self, event) -> Pond:
         session = event.unified_msg_origin
-        pond = self._ponds.get(session)
-        if pond is None:
-            pond = load_or_create(self._store, session, config=self._cfg,
-                                  clock=time.time, rng=random.Random())
-            self._ponds[session] = pond
-        return pond
+        with self._pond_cache_lock:
+            pond = self._ponds.get(session)
+            if pond is None:
+                pond = load_or_create(self._store, session, config=self._cfg,
+                                      clock=time.time, rng=random.Random())
+                self._ponds[session] = pond
+                if len(self._ponds) > _POND_CACHE_MAX:
+                    self._ponds.popitem(last=False)
+            else:
+                self._ponds.move_to_end(session)
+            return pond
 
     def _pick_custom_img(self):
         """fish_imgs/ 手动贴图随机一张（优先级最高）；没有则 None。"""
+        imgs = []
         try:
             if self._custom_img_dir.is_dir():
                 imgs = [p for p in self._custom_img_dir.iterdir()
@@ -389,7 +400,7 @@ class DaFeiYuPlugin(Star):
                 buttons.append(Button(**kw))
             rows.append(ActionRow(
                 buttons=buttons,
-                fallback_text=" / ".join(f"[{l}]" for _, l, _ in chunk)
+                fallback_text=" / ".join(f"[{label}]" for _, label, _ in chunk)
                 + "（按钮失效请发送文字指令）",
                 action_timeout=_BTN_TIMEOUT))
         return rows
@@ -404,8 +415,10 @@ class DaFeiYuPlugin(Star):
             set_extra("reply_keep_format", True)
         rows = self._build_rows(result) if self._md_mode else []
         if rows:
-            text = "\n".join(ln for ln in render_markdown(result).split("\n")
-                             if not ln.startswith("["))
+            lines = render_markdown(result).splitlines()
+            if result.buttons and lines:
+                lines.pop()
+            text = "\n".join(lines)
             res = event.chain_result([Plain(self._md(text)), *rows])
             try:
                 res.use_markdown(True)
@@ -421,8 +434,8 @@ class DaFeiYuPlugin(Star):
             session = event.unified_msg_origin
             lock = self._locks.setdefault(session, asyncio.Lock())
             async with lock:
-                pond = self._get_pond(event)
-                result = pond.handle(uid, name, command, arg)
+                pond = await asyncio.to_thread(self._get_pond, event)
+                result = await asyncio.to_thread(pond.handle, uid, name, command, arg)
             if result.event == "need_nick":
                 # 引导免费文本回昵称（180s 内的下一条非指令消息即登记）
                 self._pending[(session, uid)] = time.time() + _NICK_TTL
@@ -439,7 +452,7 @@ class DaFeiYuPlugin(Star):
                     else:
                         custom = await asyncio.to_thread(self._get_sticker, result, pond)
                         if custom is None:
-                            custom = self._pick_custom_img()
+                            custom = await asyncio.to_thread(self._pick_custom_img)
                         if completed(pond.state.decorations):
                             custom = await asyncio.to_thread(render_card_png, pond.state,
                                 ["大家共建的鱼塘：" + "、".join(completed(pond.state.decorations))],

@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+ARCHIVE_LIMIT = 20
+
 
 @dataclass
 class FishState:
@@ -21,7 +23,7 @@ class FishState:
     mood_zero_since: Optional[float] = None
     last_action: Optional[str] = None           # 连续同一动作统计（收益递减）
     repeat_count: int = 0
-    cooldowns: Dict[str, float] = field(default_factory=dict)   # 动作 -> 上次执行时刻
+    cooldowns: Dict[str, float] = field(default_factory=dict)   # 旧存档全塘冷却及全塘小游戏冷却
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +70,7 @@ class UserInfo:
     sign_streak: int = 0                  # 连续打卡天数
     last_guess_at: Optional[float] = None  # 猜鱼开局时间，跨鱼保留冷却
     last_care_at: Optional[float] = None
+    cooldowns: Dict[str, float] = field(default_factory=dict)  # 动作 -> 个人上次执行时刻
     last_adventure_day: Optional[str] = None
     keepsakes: Dict[str, int] = field(default_factory=dict)
     materials: int = 0
@@ -82,6 +85,7 @@ class UserInfo:
             "last_sign_day": self.last_sign_day, "sign_streak": self.sign_streak,
             "last_guess_at": self.last_guess_at,
             "last_care_at": self.last_care_at,
+            "cooldowns": dict(self.cooldowns),
             "last_adventure_day": self.last_adventure_day,
             "keepsakes": dict(self.keepsakes), "materials": self.materials,
             "sports_badges": self.sports_badges,
@@ -101,6 +105,7 @@ class UserInfo:
             sign_streak=int(d.get("sign_streak", 0)),
             last_guess_at=d.get("last_guess_at"),
             last_care_at=d.get("last_care_at"),
+            cooldowns={k: float(v) for k, v in (d.get("cooldowns") or {}).items()},
             last_adventure_day=d.get("last_adventure_day"),
             keepsakes=dict(d.get("keepsakes") or {}),
             materials=int(d.get("materials", 0)),
@@ -171,7 +176,7 @@ class PondState:
             community_exp=int(d.get("community_exp", 0)),
             pending_play=d.get("pending_play"),
             pending_rescue=d.get("pending_rescue"),
-            archive=list(d.get("archive") or []),
+            archive=list(d.get("archive") or [])[-ARCHIVE_LIMIT:],
             pending_guess=dict(d.get("pending_guess") or {}),
             pending_treasure=d.get("pending_treasure"),
             pending_adventure=d.get("pending_adventure"),

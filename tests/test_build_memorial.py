@@ -1,9 +1,12 @@
 """材料记账、公共装修、历史快照和存档兼容性。"""
-from copy import deepcopy
 import random
+from copy import deepcopy
+
 import pytest
+
 from game import GameConfig, Pond, PondState, UserInfo
 from game.decorations import completed
+from game.engine import memorial_lines
 
 
 @pytest.fixture
@@ -41,11 +44,15 @@ def test_heartwish_rewards_every_participant_once(pond):
     pond.handle("a", "a", "心愿")
     for uid in "abc":
         pond.state.fish.cooldowns.clear()
+        for user in pond.state.users.values():
+            user.cooldowns.clear()
         pond.state.fish.mood = 50
         pond.handle(uid, uid, "逗鱼")
     assert [pond.state.users[k].materials for k in "abc"] == [1, 1, 1]
     assert any("心愿" in event for event in pond.state.round_events)
     pond.state.fish.cooldowns.clear()
+    for user in pond.state.users.values():
+        user.cooldowns.clear()
     pond.handle("a", "a", "逗鱼")
     assert pond.state.users["a"].materials == 1
 
@@ -108,6 +115,23 @@ def test_old_archive_and_new_state_round_trip(pond):
     restored = PondState.from_dict(pond.state.to_dict())
     assert restored.to_dict() == pond.state.to_dict()
     assert restored.users["a"].materials == 1
+
+
+def test_partial_memorial_snapshot_uses_safe_defaults(tmp_path):
+    from render.fishimg import render_memorial_png
+
+    page = {"fish_name": "旧鱼", "reason": "graduated",
+            "memorial": {"fish": {}, "events": []}}
+    lines = memorial_lines(page)
+    assert "本轮参与照料：0位鱼友" in lines
+    assert "合影装饰：自然鱼塘" in lines
+    out = tmp_path / "partial-memorial.png"
+    render_memorial_png(page, str(out))
+    assert out.exists() and out.stat().st_size > 1000
+
+    malformed = {"fish_name": "旧鱼", "memorial": []}
+    assert "旧版档案" in " ".join(memorial_lines(malformed))
+    render_memorial_png(malformed, str(tmp_path / "malformed-memorial.png"))
 
 
 def test_runaway_and_event_log_bound(pond):

@@ -1,9 +1,11 @@
 """周委托：有效贡献、日上限、固定目标、奖励与跨周存档。"""
+import random
 from copy import deepcopy
 from datetime import datetime, timedelta
-import random
+
 import pytest
-from game import GameConfig, Pond, PondState, UserInfo, JsonStore
+
+from game import GameConfig, JsonStore, Pond, PondState, UserInfo
 from game.store import load_or_create
 
 
@@ -19,6 +21,8 @@ def pond():
 
 def care(p, command, uid="a"):
     p.state.fish.cooldowns.clear()
+    for user in p.state.users.values():
+        user.cooldowns.clear()
     p.state.fish.satiety, p.state.fish.mood, p.state.fish.clean = 40, 30, 20
     day = datetime.fromtimestamp(p.clock()).date().isoformat()
     p.state.daily_heartwish = {"day": day, "done": True}
@@ -61,10 +65,14 @@ def test_daily_limit_feed_snack_share_and_invalid_actions(pond):
     care(pond, "投喂")
     assert pond.state.weekly_quest["progress"]["food"] == 2
     pond.state.fish.cooldowns.clear()
+    for user in pond.state.users.values():
+        user.cooldowns.clear()
     pond.state.fish.mood = 100
     pond.handle("a", "a", "逗鱼")
     assert pond.state.weekly_quest["progress"]["pet"] == 0
     pond.state.fish.cooldowns.clear()
+    for user in pond.state.users.values():
+        user.cooldowns.clear()
     pond.state.fish.satiety = 100
     pond.handle("a", "a", "投喂")
     assert pond.state.weekly_quest["progress"]["food"] == 2

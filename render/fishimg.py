@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import random
+import re
 from pathlib import Path
 
 from game.config import GameConfig
@@ -44,12 +45,14 @@ _CHAR_FIX = {
     "🥇": "TOP1 ", "🥈": "TOP2 ", "🥉": "TOP3 ",
     "🏆": "★", "💔": "×", "⚠": "!",
 }
+_EMOJI_RE = re.compile("[\\U0001F000-\\U0001FAFF\\u2600-\\u27BF\\uFE0F\\u2B00-\\u2BFF]")
 
 
 def _safe_text(line: str) -> str:
     for k, v in _CHAR_FIX.items():
         if k in line:
             line = line.replace(k, v)
+    line = _EMOJI_RE.sub("", line)
     line = line.replace("  ", " ").replace("【 ", "【").strip()
     return line
 
@@ -285,6 +288,11 @@ def render_memorial_png(page, out_path, config=None):
     snapshot = page.get("memorial")
     if snapshot is None:
         return render_card_png(PondState(), ["鱼塘纪念册", *memorial_lines(page)], out_path, scene=False)
-    state = PondState(fish=FishState.from_dict(snapshot["fish"]),
-                      end_reason=page.get("reason"), decorations=snapshot["decorations"])
+    if not isinstance(snapshot, dict):
+        return render_card_png(PondState(), ["鱼塘纪念册", *memorial_lines(page)], out_path, scene=False)
+    fish = snapshot.get("fish")
+    decorations = snapshot.get("decorations")
+    state = PondState(fish=FishState.from_dict(fish if isinstance(fish, dict) else {}),
+                      end_reason=page.get("reason"),
+                      decorations=decorations if isinstance(decorations, dict) else {})
     return render_card_png(state, ["鱼塘纪念册", *memorial_lines(page)], out_path, config=config)

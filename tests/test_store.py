@@ -1,5 +1,8 @@
 """存储层测试。"""
+import json
 import random
+
+import pytest
 
 from game import GameConfig, Pond
 from game.store import JsonStore, load_or_create
@@ -18,7 +21,7 @@ def test_roundtrip(tmp_path):
     assert loaded is not None
     assert loaded.fish.satiety == pond.state.fish.satiety
     assert loaded.fish.weight == pond.state.fish.weight
-    assert loaded.fish.cooldowns["feed"] == pond.state.fish.cooldowns["feed"]
+    assert loaded.users["u1"].cooldowns["feed"] == pond.state.users["u1"].cooldowns["feed"]
     assert loaded.users["u1"].intimacy == 1
     assert loaded.community_exp == 1
 
@@ -34,11 +37,65 @@ def test_load_or_create(tmp_path):
     assert "u1" in p2.state.users
 
 
-def test_corrupt_file_treated_as_new(tmp_path):
+def test_load_or_create_does_not_write_until_handle(tmp_path, monkeypatch):
     store = JsonStore(tmp_path)
-    p = store._path("bad:key")
-    p.write_text("not json{{", encoding="utf-8")
-    assert store.load("bad:key") is None
+    monkeypatch.setattr(store, "save", lambda state: pytest.fail("创建实例不应先写盘"))
+    pond = load_or_create(store, "key:read-only-open", config=GameConfig(),
+                          clock=lambda: T0, rng=random.Random(1))
+    assert pond.state.fish.weight == GameConfig().start_weight
+
+
+def test_corrupt_file_is_backed_up_before_new_state_is_saved(tmp_path):
+    store = JsonStore(tmp_path)
+    key = "bad:key"
+    path = store._path(key)
+    original = '{"fish": {"weight": 55.0}, "use'
+    path.write_text(original, encoding="utf-8")
+
+    pond = load_or_create(store, key, config=GameConfig(),
+                          clock=lambda: T0, rng=random.Random(1))
+
+    backups = list(tmp_path.glob("*.bad-*.json"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == original
+    assert pond.state.fish.weight == GameConfig().start_weight
+    pond.handle("u1", "小明", "养鱼")
+    assert json.loads(path.read_text(encoding="utf-8"))["fish"]["weight"] == GameConfig().start_weight
+
+
+def test_corrupt_file_is_not_replaced_if_backup_fails(tmp_path, monkeypatch):
+    store = JsonStore(tmp_path)
+    key = "bad:key"
+    path = store._path(key)
+    original = "not json{{"
+    path.write_text(original, encoding="utf-8")
+
+    def fail_replace(self, target):
+        raise OSError("read only")
+
+    monkeypatch.setattr(type(path), "replace", fail_replace)
+    with pytest.raises(RuntimeError, match="无法备份"):
+        load_or_create(store, key, config=GameConfig(), clock=lambda: T0)
+    assert path.read_text(encoding="utf-8") == original
+    assert list(tmp_path.glob("*.bad-*.json")) == []
+
+
+def test_structurally_invalid_save_is_backed_up(tmp_path):
+    store = JsonStore(tmp_path)
+    key = "bad:shape"
+    path = store._path(key)
+    raw = '{"fish": []}'
+    path.write_text(raw, encoding="utf-8")
+    assert store.load(key) is None
+    assert list(tmp_path.glob("*.bad-*.json"))[0].read_text(encoding="utf-8") == raw
+
+    key = "bad:root"
+    path = store._path(key)
+    raw = "[]"
+    path.write_text(raw, encoding="utf-8")
+    assert store.load(key) is None
+    backups = list(tmp_path.glob(f"{path.stem}.bad-*.json"))
+    assert len(backups) == 1 and backups[0].read_text(encoding="utf-8") == raw
 
 
 def test_session_key_sanitized(tmp_path):

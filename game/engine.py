@@ -8,19 +8,19 @@
 """
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import datetime
 import math
 import random
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Callable, Dict, List, Optional, Tuple
 
 from . import actions, growth
-from .config import FISH_NAMES, STAGE_NAMES, GameConfig
-from .state import FishState, PondState, UserInfo
 from .adventures import STORIES
+from .config import FISH_NAMES, STAGE_NAMES, GameConfig
 from .decorations import DECORATIONS, completed
+from .state import ARCHIVE_LIMIT, FishState, PondState, UserInfo
 
 # 指令名 -> 处理器（不含机器人唤醒前缀；插件层负责解析）
 COMMANDS: Dict[str, str] = {
@@ -323,10 +323,13 @@ class Pond:
                 "play": c.play.cooldown_min, "weigh": c.weigh.cooldown_min,
                 "fishing": c.fishing.cooldown_min, "treasure": c.treasure.cooldown_min}
 
-    def _cooldown_left(self, key: str, minutes: int) -> float:
+    def _cooldown_left(self, key: str, minutes: int,
+                       user: Optional[UserInfo] = None) -> float:
         if minutes <= 0:
             return 0.0
         last = self.state.fish.cooldowns.get(key, 0.0)
+        if user is not None:
+            last = max(last, user.cooldowns.get(key, 0.0))
         return max(0.0, minutes * 60 - (self.clock() - last))
 
     def _cd_busy(self, label: str, remain_sec: float) -> ActionResult:
@@ -357,30 +360,32 @@ class Pond:
                      f"（{rc.expire_min} 分钟内点「救援」参与）")
 
     def _commit(self, user: UserInfo, key: str, deltas: Dict[str, float], lines: List[str],
-                exp_gain: int, title: str, event: str = "message") -> ActionResult:
+                exp_gain: int, title: str, event: str = "message",
+                intimacy_gain: float = 1.0) -> ActionResult:
         """照料动作的公共收尾：冷却/递减/群进度/亲密/补贴/升级/按钮。"""
         fish = self.state.fish
         now = self.clock()
         uid = next(k for k, u in self.state.users.items() if u is user)
         stats = self.state.round_stats.setdefault(uid, {})
-        stats["care"] = stats.get("care", 0) + 1
         category = {"clean": "clean", "adventure": "adventure",
                     "feed": "feed", "snack": "feed", "pet": "pet", "play": "play"}.get(key)
         if category and any(deltas.get(k, 0) > 0 for k in ("饱腹", "心情", "洁净", "体重")):
+            stats["care"] = stats.get("care", 0) + 1
             stats[category] = stats.get(category, 0) + 1
         self._progress_weekly(uid, key, deltas, lines)
         user.last_care_at = now
         self._progress_heartwish(user, key, deltas, lines)
         if self._cooldown_minutes().get(key, 0):
-            fish.cooldowns[key] = now
+            user.cooldowns[key] = now
         if fish.last_action == key:
             fish.repeat_count += 1
         else:
             fish.last_action, fish.repeat_count = key, 1
         self.state.community_exp += 1
         user.total_interactions += 1
-        user.intimacy += 1
-        deltas["亲密"] = deltas.get("亲密", 0.0) + 1.0
+        if intimacy_gain:
+            user.intimacy += intimacy_gain
+            deltas["亲密"] = deltas.get("亲密", 0.0) + intimacy_gain
         self._maybe_spawn_rescue(now, lines)
         day = time.strftime("%Y-%m-%d", time.localtime(now))
         if user.last_bonus_day != day:
@@ -462,7 +467,7 @@ class Pond:
             return gate
         f = self.cfg.feed
         fish = self.state.fish
-        remain = self._cooldown_left("feed", f.cooldown_min)
+        remain = self._cooldown_left("feed", f.cooldown_min, user)
         if remain:
             return self._cd_busy("投喂", remain)
         deltas: Dict[str, float] = {}
@@ -498,7 +503,7 @@ class Pond:
         if gate is not None:
             return gate
         s = self.cfg.snack
-        remain = self._cooldown_left("snack", s.cooldown_min)
+        remain = self._cooldown_left("snack", s.cooldown_min, user)
         if remain:
             return self._cd_busy("加餐", remain)
         if user.snacks < s.cost:
@@ -521,7 +526,7 @@ class Pond:
         if gate is not None:
             return gate
         p = self.cfg.pet
-        remain = self._cooldown_left("pet", p.cooldown_min)
+        remain = self._cooldown_left("pet", p.cooldown_min, user)
         if remain:
             return self._cd_busy("逗鱼", remain)
         mult = self._repeat_mult("pet")
@@ -537,7 +542,7 @@ class Pond:
         if gate is not None:
             return gate
         c = self.cfg.clean
-        remain = self._cooldown_left("clean", c.cooldown_min)
+        remain = self._cooldown_left("clean", c.cooldown_min, user)
         if remain:
             return self._cd_busy("净水", remain)
         mult = self._repeat_mult("clean")
@@ -556,7 +561,17 @@ class Pond:
         fish = self.state.fish
         if arg is not None and arg.strip():
             return self._play_pick(user, arg.strip())
-        remain = self._cooldown_left("play", p.cooldown_min)
+        if self.state.pending_play:
+            pending = self.state.pending_play
+            if pending.get("opened_by") == uid:
+                buttons = [Button(f"泡泡{i}", f"养鱼 玩耍 {i}") for i in ("①", "②", "③")]
+                buttons.append(Button("养鱼", "养鱼"))
+            else:
+                buttons = self._main_buttons()
+            return ActionResult(title="套圈进行中",
+                                lines=[f"{pending.get('opened_by_name', '鱼友')}正在选泡泡，先让这一局结束。"],
+                                buttons=buttons)
+        remain = self._cooldown_left("play", p.cooldown_min, user)
         if remain:
             return self._cd_busy("玩耍", remain)
         if fish.energy < p.vitality_cost:
@@ -571,7 +586,7 @@ class Pond:
             "opened_by_name": user.display_name,
             "opened_at": self.clock(),
         }
-        fish.cooldowns["play"] = self.clock()
+        user.cooldowns["play"] = self.clock()
         r = ActionResult(event="game_open", title="套圈小游戏",
                          lines=[actions.choice(self.rng, actions.PLAY_OPEN)])
         r.deltas = {"活力": -p.vitality_cost}
@@ -588,6 +603,11 @@ class Pond:
                              lines=["现在没有进行中的套圈。先发「玩耍」开局。"])
             r.buttons = self._main_buttons()
             return r
+        uid = next(k for k, candidate in self.state.users.items() if candidate is user)
+        if pending.get("opened_by") and pending["opened_by"] != uid:
+            return ActionResult(ok=False, title="这是别人的套圈",
+                                lines=["请让开局的鱼友选择泡泡，避免替别人结算。"],
+                                buttons=self._main_buttons())
         if arg in ("1", "2", "3"):
             n = int(arg)
         elif arg in ("①", "②", "③"):
@@ -625,7 +645,7 @@ class Pond:
         if gate is not None:
             return gate
         w = self.cfg.weigh
-        remain = self._cooldown_left("weigh", w.cooldown_min)
+        remain = self._cooldown_left("weigh", w.cooldown_min, user)
         if remain:
             return self._cd_busy("称重", remain)
         fish = self.state.fish
@@ -646,7 +666,7 @@ class Pond:
         if not tips:
             tips.append("状态不错，保持节奏！")
         lines += tips
-        return self._commit(user, "weigh", {}, lines, w.exp, title="称重")
+        return self._commit(user, "weigh", {}, lines, w.exp, title="称重", intimacy_gain=0)
 
     # -------------------------------------------------- 名号登记
     def _do_nickname(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
@@ -714,7 +734,7 @@ class Pond:
         if gate is not None:
             return gate
         fcfg = self.cfg.fishing
-        remain = self._cooldown_left("fishing", fcfg.cooldown_min)
+        remain = self._cooldown_left("fishing", fcfg.cooldown_min, user)
         if remain:
             return self._cd_busy("钓鱼", remain)
         fish = self.state.fish
@@ -744,7 +764,7 @@ class Pond:
             user.snacks += fcfg.chest_snacks
             deltas["海苔片"] = float(fcfg.chest_snacks)
             lines.append(actions.choice(self.rng, actions.FISH_CHEST))
-        return self._commit(user, "fishing", deltas, lines, fcfg.exp, title="钓鱼")
+        return self._commit(user, "fishing", deltas, lines, fcfg.exp, title="钓鱼", intimacy_gain=0)
 
     def _do_rescue(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
         """求援事件：全群点按钮协作，凑齐人数发奖励；过期鱼心情受挫。"""
@@ -763,9 +783,12 @@ class Pond:
                              lines=["你已经救过一次了，把机会让给别人吧！"])
             r.buttons = self._main_buttons()
             return r
-        rc = self.cfg.rescue
-        pr.setdefault("got", {})[uid] = name or "匿名鱼友"
         user = self._user(uid, name)
+        gate = self._nick_gate(user)
+        if gate is not None:
+            return gate
+        rc = self.cfg.rescue
+        pr.setdefault("got", {})[uid] = user.display_name or "匿名鱼友"
         fish = self.state.fish
         got_names = list(pr["got"].values())
         if len(pr["got"]) >= pr["need"]:
@@ -828,7 +851,7 @@ class Pond:
             user.snacks += w.refund
             deltas["海苔片"] = deltas.get("海苔片", 0.0) + w.refund
             lines.append(actions.choice(self.rng, actions.WISH_THANKS))
-        return self._commit(user, "wish", deltas, lines, w.exp, title="许愿池")
+        return self._commit(user, "wish", deltas, lines, w.exp, title="许愿池", intimacy_gain=0)
 
     # -------------------------------------------------- 互动小游戏
     def _personality(self) -> Optional[str]:
@@ -1463,6 +1486,7 @@ class Pond:
         self.state.round_events.clear()
         for u in self.state.users.values():
             u.intimacy = 0     # 亲密跟着鱼走；海苔片和累计次数保留
+            u.cooldowns.clear()
         r = ActionResult(event="restart", title="新的一生",
                          lines=[actions.choice(self.rng, actions.NEW_FISH),
                                 f"这一尾叫「{fish.name}」。档案、海苔片、材料和装饰都还在，接着加油！"])
@@ -1518,6 +1542,7 @@ class Pond:
             "weight": round(fish.weight, 1), "days": days, "ended_at": now,
             "memorial": self._memorial_snapshot(),
         })
+        self.state.archive[:] = self.state.archive[-ARCHIVE_LIMIT:]
 
     def _settlement_result(self) -> ActionResult:
         s = self.state.end_summary or {}
@@ -1551,23 +1576,29 @@ def memorial_lines(page: Dict) -> List[str]:
     lines = [f"{page.get('fish_name', '?')} · {'毕业合影' if page.get('reason') == 'graduated' else '离别留念'}",
              f"{page.get('grade', 'C')}级 · 体重{page.get('weight', 0)} · 相伴{page.get('days', 0)}天"]
     snapshot = page.get("memorial")
-    if snapshot is None:
+    if not isinstance(snapshot, dict):
         return lines + ["旧版档案：当时未记录合影、参与者与故事。"]
     if snapshot.get("personality"):
         lines.append("本轮性格：" + snapshot["personality"])
-    people = snapshot["participants"]
+    raw_people = snapshot.get("participants")
+    people = [person for person in raw_people if isinstance(person, dict)] \
+        if isinstance(raw_people, list) else []
     lines.append(f"本轮参与照料：{len(people)}位鱼友")
     if people:
-        lines.append("首次照料：" + people[0]["name"])
+        lines.append("首次照料：" + people[0].get("name", "匿名鱼友"))
         for key, title in (("care", "照料担当"), ("clean", "净水担当"), ("adventure", "奇遇发现者")):
             leader = max(people, key=lambda p: p.get(key, 0))
             if leader.get(key, 0):
-                lines.append(f"{title}：{leader['name']}（{leader[key]}次）")
-        lines.append("合影签名：" + "、".join(p["name"] for p in people[:12]))
+                lines.append(f"{title}：{leader.get('name', '匿名鱼友')}（{leader[key]}次）")
+        lines.append("合影签名：" + "、".join(p.get("name", "匿名鱼友") for p in people[:12]))
         if len(people) > 12:
             lines.append(f"还有{len(people) - 12}位鱼友，完整名单已保存在档案中。")
     else:
         lines.append("本轮暂无参与记录；旧存档升级前的照料未补记。")
-    lines.append("合影装饰：" + ("、".join(completed(snapshot["decorations"])) or "自然鱼塘"))
-    lines.extend(snapshot["events"] or ["平凡的陪伴，也是值得收藏的一页。"])
+    decorations = snapshot.get("decorations")
+    built = completed(decorations) if isinstance(decorations, dict) else []
+    lines.append("合影装饰：" + ("、".join(built) or "自然鱼塘"))
+    events = snapshot.get("events")
+    lines.extend(events if isinstance(events, list) and events
+                 else ["平凡的陪伴，也是值得收藏的一页。"])
     return lines

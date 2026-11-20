@@ -1,8 +1,6 @@
 """文本卡渲染测试。"""
 import random
 
-import pytest
-
 from game import GameConfig, Pond
 from render.textcard import _fmt, bar, delta_line, render_markdown, render_plain
 

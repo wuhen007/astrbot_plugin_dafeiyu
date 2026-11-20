@@ -6,8 +6,7 @@ import random
 
 import pytest
 
-from game import GameConfig, Pond
-from game import growth
+from game import GameConfig, Pond, PondState, growth
 from game.state import UserInfo
 
 H = 3600.0
@@ -42,7 +41,7 @@ def test_feed_basic():
     assert r.deltas["饱腹"] == pytest.approx(22.0)
     assert 1.5 <= r.deltas["体重"] <= 3.5
     assert r.deltas["经验"] == 8
-    assert pond.state.fish.cooldowns["feed"] == clock.now
+    assert pond.state.users["u1"].cooldowns["feed"] == clock.now
     r2 = pond.handle("u1", "小明", "投喂")          # 冷却内被拒
     assert not r2.ok
     clock.advance_hours(0.75)
@@ -157,6 +156,70 @@ def test_play_timeout():
     assert not r.ok
 
 
+def test_play_pick_is_limited_to_the_opener():
+    pond, _ = make_pond()
+    pond.handle("u1", "小明", "玩耍")
+    pending = pond.state.pending_play
+    energy = pond.state.fish.energy
+
+    second_open = pond.handle("u2", "小红", "玩耍")
+    assert second_open.title == "套圈进行中"
+    assert pond.state.pending_play == pending
+    assert pond.state.fish.energy == energy
+
+    stolen = pond.handle("u2", "小红", "玩耍", str(pending["hidden"] + 1))
+    assert not stolen.ok
+    assert pond.state.pending_play == pending
+    assert pond.state.fish.energy == energy
+    assert pond.state.users["u2"].intimacy == 0
+
+    result = pond.handle("u1", "小明", "玩耍", str(pending["hidden"] + 1))
+    assert result.ok and pond.state.pending_play is None
+
+
+def test_action_cooldowns_are_per_user_and_legacy_group_cooldown_expires():
+    pond, clock = make_pond()
+    assert pond.handle("u1", "小明", "投喂").ok
+    pond.state.fish.satiety = 40
+    assert pond.handle("u2", "小红", "投喂").ok
+    assert not pond.handle("u1", "小明", "投喂").ok
+
+    migrated, migrated_clock = make_pond()
+    migrated.state.fish.cooldowns["feed"] = migrated_clock.now
+    assert not migrated.handle("u2", "小红", "投喂").ok
+    migrated_clock.advance(45 * 60 + 1)
+    assert migrated.handle("u2", "小红", "投喂").ok
+
+
+def test_non_care_rewards_do_not_increase_intimacy():
+    pond, _ = make_pond()
+    user = pond.state.users.setdefault("u1", UserInfo(display_name="小明", nick_set=True))
+    for command in ("称重", "钓鱼"):
+        result = pond.handle("u1", "小明", command)
+        assert "亲密" not in result.deltas
+        assert user.intimacy == 0
+        assert pond.state.round_stats["u1"].get("care", 0) == 0
+    user.snacks = 10
+    result = pond.handle("u1", "小明", "许愿")
+    assert "亲密" not in result.deltas
+    assert user.intimacy == 0
+    assert pond.state.round_stats["u1"].get("care", 0) == 0
+
+
+def test_rescue_requires_a_registered_name_before_joining():
+    pond, _ = make_pond()
+    pond.state.pending_rescue = {"kind": "test", "text": "求援", "need": 1,
+                                 "got": {}, "expires": pond.clock() + 600}
+    result = pond.handle("u9", "", "救援")
+    assert result.event == "need_nick"
+    assert not pond.state.pending_rescue["got"]
+    pond.handle("u9", "", "昵称", "阿九")
+    result = pond.handle("u9", "", "救援")
+    assert result.event == "rescue"
+    assert pond.state.pending_rescue is None
+    assert pond.state.users["u9"].nick_set
+
+
 # ---------- 成长与衰减 ----------
 def test_levelup():
     pond, _ = make_pond()
@@ -264,6 +327,18 @@ def test_restart_keeps_archive_and_snacks():
     assert st.users["u1"].intimacy == 0             # 亲密跟着鱼走
     assert st.users["u1"].snacks == 12              # 钱包保留
     assert len(st.archive) == 1                     # 图鉴保留
+
+
+def test_archive_keeps_only_the_latest_twenty_entries():
+    pond, _ = make_pond()
+    for index in range(25):
+        pond.state.status = "alive"
+        pond.state.fish.name = f"鱼{index}"
+        pond._end("runaway", pond.clock(), force_grade="C")
+    assert len(pond.state.archive) == 20
+    assert [entry["fish_name"] for entry in pond.state.archive] == [f"鱼{i}" for i in range(5, 25)]
+    restored = PondState.from_dict({"archive": [{"fish_name": f"旧鱼{i}"} for i in range(25)]})
+    assert [entry["fish_name"] for entry in restored.archive] == [f"旧鱼{i}" for i in range(5, 25)]
 
 
 def test_restart_refuse_when_alive():

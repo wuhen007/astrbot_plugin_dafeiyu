@@ -8,7 +8,7 @@ from game import GameConfig, Pond
 
 pil = pytest.importorskip("PIL")
 
-from render.fishimg import render_card_png, render_fish_png  # noqa: E402
+from render.fishimg import _safe_text, render_fish_png  # noqa: E402
 
 
 class FakeClock:
@@ -45,6 +45,10 @@ def test_render_deterministic(tmp_path):
     assert a.read_bytes() == b.read_bytes()
 
 
+def test_unknown_emoji_are_removed_from_raster_text():
+    assert _safe_text("💭 心愿🆘") == "心愿"
+
+
 def test_render_all_states(tmp_path):
     pond = make_pond()
     fish = pond.state.fish
@@ -65,6 +69,7 @@ def test_render_all_states(tmp_path):
 
 def test_decorated_scene_and_memorial_snapshot(tmp_path):
     from copy import deepcopy
+
     from render.fishimg import render_memorial_png
     pond = make_pond()
     plain = tmp_path / "plain.png"

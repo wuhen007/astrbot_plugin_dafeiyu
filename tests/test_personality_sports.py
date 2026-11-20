@@ -1,8 +1,10 @@
 """性格推导、每周运动会及跨轮回限制。"""
-from datetime import datetime
-from copy import deepcopy
 import random
+from copy import deepcopy
+from datetime import datetime
+
 import pytest
+
 from game import GameConfig, Pond, PondState
 from game.engine import memorial_lines
 
@@ -33,6 +35,8 @@ def test_personality_threshold_and_live_change(pond, category, expected):
 def test_personality_only_effective_actions_and_snapshot(pond):
     for _ in range(5):
         pond.state.fish.cooldowns.clear()
+        for user in pond.state.users.values():
+            user.cooldowns.clear()
         pond.state.fish.mood = 40
         pond.handle("a", "甲", "逗鱼")
     assert pond._personality() == "黏人"
@@ -40,6 +44,8 @@ def test_personality_only_effective_actions_and_snapshot(pond):
     pond.handle("a", "甲", "性格")
     assert pond.state.fish.to_dict() == before
     pond.state.fish.cooldowns.clear()
+    for user in pond.state.users.values():
+        user.cooldowns.clear()
     pond.state.fish.satiety = 100
     pond.handle("a", "甲", "投喂")
     assert pond.state.round_stats["a"].get("feed", 0) == 0

@@ -101,6 +101,7 @@ def _to_png(data: bytes) -> bytes:
     """任意图片字节 → PNG（透明底贴白，动图取首帧）。QQ 官方富媒体
     不支持 webp，这里统一归一化。需要 Pillow。"""
     import io
+
     from PIL import Image
     img = Image.open(io.BytesIO(data))
     if getattr(img, "is_animated", False):

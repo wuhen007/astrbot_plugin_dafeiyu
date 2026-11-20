@@ -95,21 +95,15 @@ def test_heartwish_three_people_fixed_and_once(pond):
     assert wish["goal"] == 3
     assert pond.handle("a", "a", "逗鱼").ok
     assert len(wish["got"]) == 1
-    assert not pond.handle("b", "b", "逗鱼").ok  # 全塘动作冷却，拒绝不计
-    pond.test_now[0] += 901
-    pond.handle("a", "a", "逗鱼")
-    assert len(wish["got"]) == 1
-    pond.test_now[0] += 901
-    pond.handle("b", "b", "逗鱼")
+    assert pond.handle("b", "b", "逗鱼").ok  # 冷却按鱼友分别计算
     assert len(wish["got"]) == 2
+    assert not pond.handle("b", "b", "逗鱼").ok  # 同一鱼友仍受冷却限制
     pond.state.users["d"] = UserInfo("d", True, last_care_at=pond.clock())
     pond.handle("d", "d", "心愿")
     assert wish["goal"] == 3
-    pond.test_now[0] += 901
     result = pond.handle("c", "c", "逗鱼")
     assert wish["done"] and len(wish["got"]) == 3
     assert any("心愿完成" in line for line in result.lines)
-    pond.test_now[0] += 901
     result = pond.handle("d", "d", "逗鱼")
     assert not any("心愿完成" in line for line in result.lines)
 

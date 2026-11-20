@@ -8,6 +8,7 @@ import importlib
 import json
 import logging
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -381,6 +382,53 @@ def test_default_mode_is_markdown(plugin):
     assert p2._md_mode is True
 
 
+def test_commands_share_one_source_and_bare_aliases_are_restricted(plugin):
+    main, p, tmp = plugin
+    assert set(main._ACTION_KEYS) == set(main.COMMANDS) - {"养鱼"}
+    assert "帮助" not in main._ALIAS_NAMES
+    assert "档案" not in main._ALIAS_NAMES
+    assert "/帮助" in main._ALIAS_NAMES
+    assert "面板" not in main._ALIAS_NAMES and "/面板" in main._ALIAS_NAMES
+    assert main._ACTION_RE.search("养鱼 面板").group(1) == "面板"
+    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str="#面板"))))
+    assert any("鱼籽" in text for text in _texts(results[-1]))
+
+
+def test_data_directory_fallback_is_anchored_to_plugin_location(plugin, monkeypatch):
+    main, p, tmp = plugin
+    from astrbot.api.star import StarTools
+
+    def fail(_name):
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(StarTools, "get_data_dir", fail, raising=False)
+    assert main._default_data_dir() == main.PLUGIN_DIR.parent.parent / "plugin_data" / "astrbot_plugin_dafeiyu"
+
+
+def test_metadata_is_single_version_source_and_contains_market_fields(plugin):
+    main, p, tmp = plugin
+    text = (main.PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
+    assert f'version: "{main._PLUGIN_VERSION}"' in text
+    assert main._PLUGIN_VERSION == "2.0.1"
+    assert "display_name:" in text and "support_platforms:" in text
+
+
+def test_missing_custom_image_directory_is_a_normal_fallback(plugin, caplog, tmp_path):
+    main, p, tmp = plugin
+    p._custom_img_dir = tmp_path / "missing-fish-images"
+    assert p._pick_custom_img() is None
+    assert not any("自定义鱼图读取失败" in record.message for record in caplog.records)
+
+
+def test_markdown_filter_only_removes_button_hint_line(plugin):
+    main, p, tmp = plugin
+    from game.engine import ActionResult, Button
+    result = ActionResult(title="记录", lines=["[已达成] 本周目标完成"],
+                          buttons=[Button("养鱼", "养鱼")])
+    text = "".join(_texts(p._build_result(FakeEvent(), result)))
+    assert "[已达成] 本周目标完成" in text
+
+
 def test_slash_message_reaches_panel(plugin):
     main, p, tmp = plugin
     ev = FakeEvent(name="小明", message_str="/养鱼")
@@ -585,3 +633,68 @@ def test_compact_markdown_keeps_lines_without_empty_paragraphs(plugin):
     assert "  \n" in text
     assert "\n\n" not in text
     assert "有效照料自动推进" in text
+
+
+def test_pond_cache_is_bounded_and_lru(plugin, monkeypatch):
+    main, p, tmp = plugin
+    monkeypatch.setattr(main, "load_or_create", lambda *args, **kwargs: object())
+    for i in range(main._POND_CACHE_MAX):
+        p._get_pond(FakeEvent(session=f"cache:{i}"))
+    p._get_pond(FakeEvent(session="cache:0"))
+    p._get_pond(FakeEvent(session="cache:new"))
+    assert len(p._ponds) == main._POND_CACHE_MAX
+    assert "cache:0" in p._ponds
+    assert "cache:1" not in p._ponds
+    assert "cache:new" in p._ponds
+
+
+def test_idle_session_locks_are_released(plugin):
+    import gc
+
+    main, p, tmp = plugin
+    lock = asyncio.Lock()
+    p._locks["idle"] = lock
+    assert p._locks["idle"] is lock
+    del lock
+    gc.collect()
+    assert "idle" not in p._locks
+
+
+def test_handle_and_custom_image_work_run_in_threads(plugin, monkeypatch):
+    main, p, tmp = plugin
+    event = FakeEvent(message_str="/投喂")
+    pond = p._get_pond(event)
+    original_handle = pond.handle
+    handle_threads = []
+    image_threads = []
+
+    def tracked_handle(*args):
+        handle_threads.append(threading.get_ident())
+        return original_handle(*args)
+
+    def pick_custom_img():
+        image_threads.append(threading.get_ident())
+        return None
+
+    monkeypatch.setattr(pond, "handle", tracked_handle)
+    monkeypatch.setattr(p, "_pick_custom_img", pick_custom_img)
+    caller_thread = threading.get_ident()
+    _run(_gather(p._dispatch(event, "投喂")))
+    assert handle_threads and handle_threads[0] != caller_thread
+    assert image_threads and image_threads[0] != caller_thread
+
+
+def test_cache_miss_load_runs_in_thread(plugin, monkeypatch):
+    main, p, tmp = plugin
+    p._send_image = False
+    original_load = main.load_or_create
+    load_threads = []
+
+    def tracked_load(*args, **kwargs):
+        load_threads.append(threading.get_ident())
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(main, "load_or_create", tracked_load)
+    caller_thread = threading.get_ident()
+    _run(_gather(p._dispatch(FakeEvent(), "养鱼")))
+    assert load_threads and load_threads[0] != caller_thread
