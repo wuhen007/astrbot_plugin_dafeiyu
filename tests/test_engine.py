@@ -2,6 +2,7 @@
 
 时钟与随机数全部注入，测试完全确定。
 """
+
 import random
 
 import pytest
@@ -38,15 +39,28 @@ def test_feed_basic():
     pond, clock = make_pond()
     r = pond.handle("u1", "小明", "投喂")
     assert r.ok
+    labels = [button.label for button in r.buttons]
+    assert "投喂" not in labels
+    assert any(label.endswith("看看鱼塘") for label in labels)
+    assert any(label.endswith("小游戏") for label in labels)
     assert r.deltas["饱腹"] == pytest.approx(22.0)
     assert 1.5 <= r.deltas["体重"] <= 3.5
     assert r.deltas["经验"] == 8
     assert pond.state.users["u1"].cooldowns["feed"] == clock.now
-    r2 = pond.handle("u1", "小明", "投喂")          # 冷却内被拒
+    r2 = pond.handle("u1", "小明", "投喂")  # 冷却内被拒
     assert not r2.ok
     clock.advance_hours(0.75)
     r3 = pond.handle("u1", "小明", "投喂")
     assert r3.ok
+
+
+def test_sign_result_hides_completed_action_but_keeps_navigation():
+    pond, _ = make_pond()
+    result = pond.handle("u1", "小明", "签到")
+    labels = [button.label for button in result.buttons]
+    assert "签到" not in labels
+    assert any(label.endswith("看看鱼塘") for label in labels)
+    assert any(label.endswith("小游戏") for label in labels)
 
 
 def test_pet_clean_snack():
@@ -54,15 +68,15 @@ def test_pet_clean_snack():
     r = pond.handle("u1", "小明", "逗鱼")
     assert r.deltas["心情"] == pytest.approx(6.0 + pond.cfg.heartwish.mood_gain)
     assert r.deltas["亲密"] == 1
-    pond.state.fish.clean = 20.0        # 压低起点，避免 80+35 触顶截断
+    pond.state.fish.clean = 20.0  # 压低起点，避免 80+35 触顶截断
     clock.advance_hours(0.3)
     r = pond.handle("u1", "小明", "净水")
     assert r.deltas["洁净"] == pytest.approx(35.0)
     clock.advance_hours(0.3)
-    r = pond.handle("u1", "小明", "加餐")           # 白饭 -1，今日补贴已领
+    r = pond.handle("u1", "小明", "加餐")  # 白饭 -1，今日补贴已领
     assert r.deltas["白饭"] == pytest.approx(-1.0)
-    assert pond.state.users["u1"].rice == 5        # 5(初始) +1(补贴) -1(加餐)
-    assert pond.state.users["u1"].snacks == 0       # 绝版海苔不参与新玩法
+    assert pond.state.users["u1"].rice == 5  # 5(初始) +1(补贴) -1(加餐)
+    assert pond.state.users["u1"].snacks == 0  # 绝版海苔不参与新玩法
 
 
 def test_snack_refuse_when_empty():
@@ -80,7 +94,7 @@ def test_overfeed():
     assert r.ok
     assert r.deltas["体重"] == pytest.approx(-1.0)
     assert r.deltas["心情"] == pytest.approx(-6.0)
-    assert fish.satiety == pytest.approx(95.0)      # 撑到不涨饱腹
+    assert fish.satiety == pytest.approx(95.0)  # 撑到不涨饱腹
     assert r.deltas["经验"] == 2
 
 
@@ -99,7 +113,7 @@ def test_diminishing_returns():
     assert r1.deltas["心情"] == pytest.approx(6.0 + pond.cfg.heartwish.mood_gain)
     clock.advance(15 * 60 + 1)
     r2 = pond.handle("u1", "小明", "逗鱼")
-    assert r2.deltas["心情"] == pytest.approx(4.5)      # ×0.75
+    assert r2.deltas["心情"] == pytest.approx(4.5)  # ×0.75
     clock.advance(15 * 60 + 1)
     r3 = pond.handle("u1", "小明", "逗鱼")
     # ×0.75² = 3.375，展示层四舍五入到 1 位小数
@@ -111,7 +125,7 @@ def test_play_success_and_miss():
     pond, clock = make_pond()
     r = pond.handle("u1", "小明", "玩耍")
     assert r.event == "game_open"
-    assert pond.state.fish.energy == pytest.approx(60.0)    # 开局扣 20 活力
+    assert pond.state.fish.energy == pytest.approx(60.0)  # 开局扣 20 活力
     pending = pond.state.pending_play
     assert pending is not None
     hidden = pending["hidden"]
@@ -136,7 +150,7 @@ def test_play_dirty_water():
     pond.handle("u1", "小明", "玩耍")
     hidden = pond.state.pending_play["hidden"]
     r = pond.handle("u1", "小明", "玩耍", arg=str(hidden + 1))
-    assert "体重" not in r.deltas                   # 猜中也捞不到
+    assert "体重" not in r.deltas  # 猜中也捞不到
     assert r.deltas["心情"] == pytest.approx(3.0)
 
 
@@ -151,7 +165,7 @@ def test_play_timeout():
     pond, clock = make_pond()
     pond.handle("u1", "小明", "玩耍")
     clock.advance(6 * 60 + 1)
-    pond.handle("u1", "小明", "养鱼")               # touch 顺带清理超时
+    pond.handle("u1", "小明", "养鱼")  # touch 顺带清理超时
     assert pond.state.pending_play is None
     r = pond.handle("u1", "小明", "玩耍", arg="1")
     assert not r.ok
@@ -209,8 +223,13 @@ def test_non_care_rewards_do_not_increase_intimacy():
 
 def test_rescue_requires_a_registered_name_before_joining():
     pond, _ = make_pond()
-    pond.state.pending_rescue = {"kind": "test", "text": "求援", "need": 1,
-                                 "got": {}, "expires": pond.clock() + 600}
+    pond.state.pending_rescue = {
+        "kind": "test",
+        "text": "求援",
+        "need": 1,
+        "got": {},
+        "expires": pond.clock() + 600,
+    }
     result = pond.handle("u9", "", "救援")
     assert result.event == "need_nick"
     assert not pond.state.pending_rescue["got"]
@@ -233,7 +252,7 @@ def test_levelup():
 
 def test_decay_offline():
     pond, clock = make_pond()
-    pond.handle("u1", "小明", "养鱼")               # 先 touch 一次对齐时钟
+    pond.handle("u1", "小明", "养鱼")  # 先 touch 一次对齐时钟
     clock.advance_hours(2)
     r = pond.handle("u1", "小明", "养鱼")
     fish = pond.state.fish
@@ -246,17 +265,18 @@ def test_decay_offline():
 
 def test_decay_stage_multiplier():
     pond, clock = make_pond()
-    pond.state.fish.exp = 500                       # Lv.6 → ×1.85
+    pond.state.fish.exp = 500  # Lv.6 → ×1.85
     clock.advance_hours(2)
     pond.handle("u1", "小明", "养鱼")
     assert pond.state.fish.satiety == pytest.approx(
-        70 - pond.cfg.decay_satiety * 2 * pond.cfg.stage_decay_multiplier[-1])
+        70 - pond.cfg.decay_satiety * 2 * pond.cfg.stage_decay_multiplier[-1]
+    )
 
 
 def test_pond_level_relief():
     pond, _ = make_pond()
     pond.state.community_exp = 199
-    pond.handle("u1", "小明", "逗鱼")               # 第 200 次群互动
+    pond.handle("u1", "小明", "逗鱼")  # 第 200 次群互动
     assert pond.pond_level() == 1
     assert growth.decay_multiplier(1, 1, pond.cfg) == pytest.approx(0.96)
 
@@ -289,7 +309,9 @@ def test_graduate_gate():
 def test_graduate_and_rewards():
     pond, _ = make_pond()
     _ready_fish(pond)
-    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55, nick_set=True, snacks=5, rice=2)
+    pond.state.users["u1"] = UserInfo(
+        display_name="小明", intimacy=55, nick_set=True, snacks=5, rice=2
+    )
     pond.state.users["u2"] = UserInfo(display_name="小红", intimacy=30, nick_set=True)
     pond.state.users["u3"] = UserInfo(display_name="阿三", intimacy=20, nick_set=True)
     r = pond.handle("u1", "小明", "出栏")
@@ -300,10 +322,10 @@ def test_graduate_and_rewards():
     assert s["score"] == pytest.approx(77.5)
     assert s["grade"] == "A"
     assert pond.state.archive[-1]["grade"] == "A"
-    assert pond.state.users["u1"].rice == 14        # 第 1 名全额
-    assert pond.state.users["u2"].rice == 6         # 第 2/3 名半额
+    assert pond.state.users["u1"].rice == 14  # 第 1 名全额
+    assert pond.state.users["u2"].rice == 6  # 第 2/3 名半额
     assert pond.state.users["u3"].rice == 6
-    assert pond.state.users["u1"].snacks == 5       # 绝版海苔保持不变
+    assert pond.state.users["u1"].snacks == 5  # 绝版海苔保持不变
     assert any(b.label == "再养一条" for b in r.buttons)
 
 
@@ -319,7 +341,9 @@ def test_blocked_after_end():
 def test_restart_keeps_archive_and_snacks():
     pond, _ = make_pond()
     _ready_fish(pond)
-    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55, nick_set=True, snacks=5, rice=2)
+    pond.state.users["u1"] = UserInfo(
+        display_name="小明", intimacy=55, nick_set=True, snacks=5, rice=2
+    )
     pond.handle("u1", "小明", "出栏")
     r = pond.handle("u1", "小明", "再养一条")
     assert r.ok
@@ -327,10 +351,10 @@ def test_restart_keeps_archive_and_snacks():
     assert st.status == "alive"
     assert st.fish.weight == pond.cfg.start_weight
     assert st.fish.exp == 0
-    assert st.users["u1"].intimacy == 0             # 亲密跟着鱼走
-    assert st.users["u1"].rice == 14               # 新奖励进入白饭钱包
-    assert st.users["u1"].snacks == 5              # 旧海苔库存保留
-    assert len(st.archive) == 1                     # 图鉴保留
+    assert st.users["u1"].intimacy == 0  # 亲密跟着鱼走
+    assert st.users["u1"].rice == 14  # 新奖励进入白饭钱包
+    assert st.users["u1"].snacks == 5  # 旧海苔库存保留
+    assert len(st.archive) == 1  # 图鉴保留
 
 
 def test_archive_keeps_only_the_latest_twenty_entries():
@@ -354,9 +378,9 @@ def test_restart_refuse_when_alive():
 def test_runaway_by_hunger():
     pond, clock = make_pond()
     pond.state.fish.satiety = 5.0
-    clock.advance_hours(40)                         # 饱腹自然归零
-    pond.handle("u1", "小明", "养鱼")               # 归零计时开始
-    clock.advance_hours(37)                         # 超过 36h 宽限
+    clock.advance_hours(40)  # 饱腹自然归零
+    pond.handle("u1", "小明", "养鱼")  # 归零计时开始
+    clock.advance_hours(37)  # 超过 36h 宽限
     r = pond.handle("u1", "小明", "养鱼")
     assert pond.state.status == "ended"
     assert pond.state.end_reason == "runaway"
@@ -385,14 +409,14 @@ def test_community_exp_and_rank():
 def test_nickname_gate_then_register():
     """无平台昵称的新鱼友：照料被引导登记 → 昵称登记后放行，排行显示名号。"""
     pond, _ = make_pond()
-    r = pond.handle("u9", "", "投喂")            # 无平台昵称
+    r = pond.handle("u9", "", "投喂")  # 无平台昵称
     assert not r.ok and r.event == "need_nick"
     assert any("昵称" in ln for ln in r.lines)
     r2 = pond.handle("u9", "", "昵称", "阿鱼")
     assert r2.ok and any("阿鱼" in ln for ln in r2.lines)
     assert pond.state.users["u9"].nick_set
     r3 = pond.handle("u9", "", "投喂")
-    assert r3.ok                                 # 登记后放行
+    assert r3.ok  # 登记后放行
     pond.handle("u1", "小明", "逗鱼")
     rk = pond.handle("u9", "", "排行")
     assert any("阿鱼" in ln for ln in rk.lines)
@@ -400,10 +424,10 @@ def test_nickname_gate_then_register():
 
 def test_nickname_rename_and_limit():
     pond, _ = make_pond()
-    assert pond.handle("u1", "小明", "昵称", "大明").ok     # 平台昵称也可改名
-    r = pond.handle("u1", "", "昵称", "这个名字超过了十二个字的限制")   # 16 字
+    assert pond.handle("u1", "小明", "昵称", "大明").ok  # 平台昵称也可改名
+    r = pond.handle("u1", "", "昵称", "这个名字超过了十二个字的限制")  # 16 字
     assert not r.ok
-    r2 = pond.handle("u1", "", "昵称")           # 缺参 → 提示当前名号
+    r2 = pond.handle("u1", "", "昵称")  # 缺参 → 提示当前名号
     assert not r2.ok and any("当前名号" in ln for ln in r2.lines)
     u = pond.state.users["u1"]
     assert u.nick_set and u.display_name == "大明"

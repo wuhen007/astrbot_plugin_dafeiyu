@@ -3,6 +3,7 @@
 v1.1.0 起发送结构 = 两条消息：①贴图/鱼图直接发原图（交互事件不发图）
 ②「md 文本卡 + 指令按钮」（data 带 {"cmd": "/养鱼 X"}，适配器补丁转指令按钮）。
 """
+
 import asyncio
 import importlib
 import json
@@ -17,7 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-PLAIN_CLS = None    # 由 stub 注入
+PLAIN_CLS = None  # 由 stub 注入
 IMAGE_CLS = None
 
 
@@ -33,8 +34,9 @@ class FakeResult:
 
 
 class FakeEvent:
-    def __init__(self, session="test:GroupMessage:1", uid="u1", name="小明",
-                 message_str="", interaction=None):
+    def __init__(
+        self, session="test:GroupMessage:1", uid="u1", name="小明", message_str="", interaction=None
+    ):
         self._session, self._uid, self._name = session, uid, name
         self.message_str = message_str
         self._interaction = interaction
@@ -89,6 +91,7 @@ def _stub_astrbot(monkeypatch):
     def register(*args, **kwargs):
         def deco(cls):
             return cls
+
         return deco
 
     star_pkg.register = register
@@ -126,16 +129,18 @@ def _stub_astrbot(monkeypatch):
     def command(command_name=None, sub_command=None, alias=None, **kwargs):
         def deco(func):
             return func
+
         return deco
 
     def button_action(action_id=None, **kwargs):
         def deco(func):
             return func
+
         return deco
 
     filter_pkg.command = command
     filter_pkg.button_action = button_action
-    filter_pkg.event_message_type = lambda *a, **k: (lambda f: f)
+    filter_pkg.event_message_type = lambda *a, **k: lambda f: f
     filter_pkg.EventMessageType = types.SimpleNamespace(ALL="all")
 
     astrbot.api = api
@@ -162,9 +167,16 @@ def plugin(tmp_path, monkeypatch):
     main = importlib.import_module("main")
     # 贴图源置离线：测试聚焦发送结构与昵称流程，不联网
     import render.stickers as ss
+
     monkeypatch.setattr(ss, "load_index", lambda *a, **k: None)
-    cfg = main.AstrBotConfig({"output_mode": "markdown", "send_image": True,
-                              "difficulty": "标准", "data_dir": str(tmp_path)})
+    cfg = main.AstrBotConfig(
+        {
+            "output_mode": "markdown",
+            "send_image": True,
+            "difficulty": "标准",
+            "data_dir": str(tmp_path),
+        }
+    )
     return main, main.DaFeiYuPlugin(None, cfg), tmp_path
 
 
@@ -191,6 +203,76 @@ def _saved_state(tmp_path):
 
 
 # ---------------------------------------------------------------- 测试
+def test_group_chat_reward_requires_mention_or_name(plugin, monkeypatch):
+    main, p, tmp = plugin
+    monkeypatch.setattr(main.time, "time", lambda: 1_800_000_000)
+
+    class FixedRng:
+        def random(self):
+            return 0.1
+
+        def choice(self, choices):
+            return "rice"
+
+    event = FakeEvent(message_str="普通闲聊")
+    pond = p._get_pond(event)
+    pond.rng = FixedRng()
+    assert _run(_gather(p.on_chat_reward(event))) == []
+    assert not list((tmp / "ponds").glob("*.json"))
+
+    event.message_str = ""
+    event.message_obj = types.SimpleNamespace(
+        self_id="bot",
+        raw_message={"raw_data": {"message": [{"type": "at", "data": {"qq": "bot"}}]}},
+    )
+    assert main._mentions_bot(event)
+    event.message_obj = None
+    event.get_self_id = lambda: "bot"
+    event.get_messages = lambda: [types.SimpleNamespace(type="At", qq="bot")]
+    results = _run(_gather(p.on_chat_reward(event)))
+    expected = "和大肥鱼聊得开心，获得了 白饭 ×1！"
+    assert _texts(results[0]) == [expected]
+    assert list((tmp / "ponds").glob("*.json"))
+
+    event.message_str = "今天真开心"
+    event.get_messages = lambda: []
+    assert _run(_gather(p.on_chat_reward(event))) == []
+    assert not event.stopped
+    assert pond.state.users["u1"].rice == 6
+    event._uid = "u2"
+    event.message_str = "大肥鱼今天很开心"
+    results = _run(_gather(p.on_chat_reward(event)))
+    assert _texts(results[0]) == [expected]
+    assert pond.state.users["u2"].rice == 6
+
+
+def test_chat_reward_cooldown_daily_cap_and_legacy_user(plugin, monkeypatch):
+    from game.state import UserInfo
+
+    main, p, tmp = plugin
+    now = [1_800_000_000]
+    monkeypatch.setattr(main.time, "time", lambda: now[0])
+    pond = p._get_pond(FakeEvent())
+
+    class FixedRng:
+        def random(self):
+            return 0.1
+
+        def choice(self, choices):
+            return choices[0]
+
+    pond.rng = FixedRng()
+    assert pond.chat_reward("u1", "小明") == "rice"
+    assert pond.chat_reward("u1", "小明") is None
+    now[0] += 1800
+    assert pond.chat_reward("u1", "小明") == "rice"
+    now[0] += 1800
+    assert pond.chat_reward("u1", "小明") is None
+    saved = _saved_state(tmp)["users"]["u1"]
+    assert saved["chat_reward_count"] == 2
+    assert UserInfo.from_dict({"display_name": "旧档"}).chat_reward_count == 0
+
+
 def test_load_creates_data_dir(plugin):
     main, p, tmp = plugin
     assert (tmp / "ponds").is_dir()
@@ -200,13 +282,13 @@ def test_feed_two_messages_image_then_kb(plugin):
     main, p, tmp = plugin
     ev = FakeEvent()
     results = _run(_gather(p._dispatch(ev, "投喂")))
-    assert len(results) == 2                     # ① 鱼图直发 ② 多行文本卡+按钮
+    assert len(results) == 2  # ① 鱼图直发 ② 多行文本卡+按钮
     assert results[0].image is True
     kb = results[1]
     assert kb.md is True
     texts = "\n".join(_texts(kb))
     assert "【投喂】" in texts and "饱腹 +22" in texts
-    assert "[投喂]" not in texts                 # 真按钮存在时不再暴露提示行
+    assert "[投喂]" not in texts  # 真按钮存在时不再暴露提示行
     rows = _rows(kb, main)
     assert rows and rows[0].action_timeout == 86400
     assert _saved_state(tmp)["fish"]["exp"] == 8
@@ -223,7 +305,7 @@ def test_nickname_free_text_flow(plugin):
 
     ev2 = FakeEvent(name="", message_str="阿鱼")  # 免费文本回复昵称
     results2 = _run(_gather(p.on_nickname_reply(ev2)))
-    assert ev2.stopped                           # 停住事件，别让其它插件/LLM 插话
+    assert ev2.stopped  # 停住事件，别让其它插件/LLM 插话
     assert results2 and any("阿鱼" in t for t in _texts(results2[-1]))
 
     ev3 = FakeEvent(name="", message_str="投喂")
@@ -241,7 +323,7 @@ def test_nickname_listener_ignores_commands(plugin):
     ev = FakeEvent(name="", message_str="养鱼")
     results = _run(_gather(p.on_nickname_reply(ev)))
     assert results == []
-    assert ("test:GroupMessage:1", "u1") in p._pending   # 引导仍挂起
+    assert ("test:GroupMessage:1", "u1") in p._pending  # 引导仍挂起
 
 
 def test_nickname_prompt_sweep_removes_expired_entries(plugin):
@@ -255,14 +337,15 @@ def test_nickname_prompt_sweep_removes_expired_entries(plugin):
 
 def test_button_click_routes_and_skips_image(plugin):
     main, p, tmp = plugin
-    inter = types.SimpleNamespace(action_id="dfy:投喂||投喂",
-                                  data={"cmd": "/养鱼 投喂", "act": "投喂", "arg": None})
+    inter = types.SimpleNamespace(
+        action_id="dfy:投喂||投喂", data={"cmd": "/养鱼 投喂", "act": "投喂", "arg": None}
+    )
     ev = FakeEvent(interaction=inter)
     results = _run(_gather(p.on_button(ev)))
-    assert len(results) == 1                     # 交互事件不发图
+    assert len(results) == 1  # 交互事件不发图
     assert results[0].image is False
     assert any("投喂" in t for t in _texts(results[0]))
-    assert ev.stopped                            # 停事件，防 zhutian 插话
+    assert ev.stopped  # 停事件，防 zhutian 插话
     assert _saved_state(tmp)["fish"]["exp"] == 8
 
 
@@ -288,7 +371,7 @@ def test_button_rows_layout(plugin):
     rows = _rows(results[-1], main)
     assert rows
     first = rows[0].buttons
-    assert [b.label for b in first] == ["投喂", "加餐", "逗鱼"]
+    assert [b.label for b in first] == ["🍚 投喂", "🍙 加餐", "🫧 逗鱼"]
     b0 = first[0]
     assert b0.id.startswith("dfy:")
     assert b0.action.data["cmd"] == "/养鱼 投喂"
@@ -300,6 +383,7 @@ def test_command_button_shim_builds_locally_on_db_lock(plugin, monkeypatch):
     """AstrBot 回调注册表 SQLite 报 database is locked 时，shim 本地构建键盘
     （type=2 指令按钮、不写注册表），消息发送不再失败。"""
     import sqlite3
+
     main, p, tmp = plugin
 
     class FakeTarget:
@@ -314,12 +398,19 @@ def test_command_button_shim_builds_locally_on_db_lock(plugin, monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "astrbot.core.platform.sources.qqofficial.qqofficial_message_event",
-        types.SimpleNamespace(QQOfficialMessageEvent=FakeTarget))
+        types.SimpleNamespace(QQOfficialMessageEvent=FakeTarget),
+    )
     assert main._install_command_button_patch() is True
 
-    row = main.ActionRow(buttons=[main.Button(
-        id="dfy:投喂||投喂", label="投喂",
-        action=main.CallbackAction(data={"cmd": "/投喂", "act": "投喂", "arg": None}))])
+    row = main.ActionRow(
+        buttons=[
+            main.Button(
+                id="dfy:投喂||投喂",
+                label="投喂",
+                action=main.CallbackAction(data={"cmd": "/投喂", "act": "投喂", "arg": None}),
+            )
+        ]
+    )
     chain = types.SimpleNamespace(chain=[main.Plain("【出栏图鉴】"), row])
     kb = FakeTarget._parse_keyboard(chain)
     btn = kb["content"]["rows"][0]["buttons"][0]
@@ -327,7 +418,7 @@ def test_command_button_shim_builds_locally_on_db_lock(plugin, monkeypatch):
     assert btn["action"]["data"] == "/投喂"
     assert btn["action"]["enter"] is True
     assert btn["action"]["unsupport_tips"] == "请直接发送：/投喂"
-    assert "database" not in str(kb)            # 键盘构建成功，不再抛库锁
+    assert "database" not in str(kb)  # 键盘构建成功，不再抛库锁
 
 
 def test_command_button_shim_passes_foreign_buttons(plugin, monkeypatch):
@@ -346,11 +437,15 @@ def test_command_button_shim_passes_foreign_buttons(plugin, monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "astrbot.core.platform.sources.qqofficial.qqofficial_message_event",
-        types.SimpleNamespace(QQOfficialMessageEvent=FakeTarget))
+        types.SimpleNamespace(QQOfficialMessageEvent=FakeTarget),
+    )
     assert main._install_command_button_patch() is True
 
-    foreign = main.ActionRow(buttons=[main.Button(
-        id="zt:x", label="x", action=main.CallbackAction(data={"act": "zt.y"}))])
+    foreign = main.ActionRow(
+        buttons=[
+            main.Button(id="zt:x", label="x", action=main.CallbackAction(data={"act": "zt.y"}))
+        ]
+    )
     kb = FakeTarget._parse_keyboard(types.SimpleNamespace(chain=[foreign]))
     assert kb == {"content": {"rows": []}} and calls
 
@@ -363,14 +458,16 @@ def test_integrity_check_raises_on_stale_render(plugin, monkeypatch):
     """文件混版自检：render_card_png 缺 scene 参数时导入应报错并给修复命令。"""
     main, p, tmp = plugin
     from render import fishimg
+
     orig = fishimg.render_card_png
 
-    def stale(*args, **kwargs):        # 模拟旧版：不认识 scene
+    def stale(*args, **kwargs):  # 模拟旧版：不认识 scene
         kwargs.pop("scene", None)
         return orig(*args, **kwargs)
 
     monkeypatch.setattr(fishimg, "render_card_png", stale)
     import inspect
+
     assert "scene" not in inspect.signature(fishimg.render_card_png).parameters
     # 真实防护在 main 导入时执行；这里验证签名检测逻辑本身可用
     assert "scene" in inspect.signature(orig).parameters
@@ -381,8 +478,8 @@ def test_text_mode_uses_plain(plugin):
     p._md_mode = False
     results = _run(_gather(p._dispatch(FakeEvent(), "逗鱼")))
     kb = results[-1]
-    assert kb.md is None                         # plain_result 未走 use_markdown
-    assert _rows(kb, main) == []                 # 纯文本模式不带键盘
+    assert kb.md is None  # plain_result 未走 use_markdown
+    assert _rows(kb, main) == []  # 纯文本模式不带键盘
     assert any("逗鱼" in t for t in _texts(kb))
 
 
@@ -412,14 +509,17 @@ def test_data_directory_fallback_is_anchored_to_plugin_location(plugin, monkeypa
         raise RuntimeError("unavailable")
 
     monkeypatch.setattr(StarTools, "get_data_dir", fail, raising=False)
-    assert main._default_data_dir() == main.PLUGIN_DIR.parent.parent / "plugin_data" / "astrbot_plugin_dafeiyu"
+    assert (
+        main._default_data_dir()
+        == main.PLUGIN_DIR.parent.parent / "plugin_data" / "astrbot_plugin_dafeiyu"
+    )
 
 
 def test_metadata_is_single_version_source_and_contains_market_fields(plugin):
     main, p, tmp = plugin
     text = (main.PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
     assert f'version: "{main._PLUGIN_VERSION}"' in text
-    assert main._PLUGIN_VERSION == "2.1.0"
+    assert main._PLUGIN_VERSION == "2.2.0"
     assert "display_name:" in text and "support_platforms:" in text
 
 
@@ -445,8 +545,10 @@ def test_disabled_sticker_source_does_not_fetch_index(plugin, monkeypatch):
 def test_markdown_filter_only_removes_button_hint_line(plugin):
     main, p, tmp = plugin
     from game.engine import ActionResult, Button
-    result = ActionResult(title="记录", lines=["[已达成] 本周目标完成"],
-                          buttons=[Button("养鱼", "养鱼")])
+
+    result = ActionResult(
+        title="记录", lines=["[已达成] 本周目标完成"], buttons=[Button("养鱼", "养鱼")]
+    )
     text = "".join(_texts(p._build_result(FakeEvent(), result)))
     assert "[已达成] 本周目标完成" in text
 
@@ -460,8 +562,9 @@ def test_slash_message_reaches_panel(plugin):
 
 def test_panel_nick_gate(plugin):
     main, p, tmp = plugin
-    ev = FakeEvent(name="")                      # 无平台昵称
+    ev = FakeEvent(name="")  # 无平台昵称
     results = _run(_gather(p._dispatch(ev, "养鱼")))
+    assert ev.stopped
     kb = results[-1]
     assert any("昵称" in t for t in _texts(kb))  # 面板先问名字
     assert p._pending[("test:GroupMessage:1", "u1")] > 0
@@ -481,8 +584,10 @@ def test_guess_text_command_and_argument(plugin, prefix):
 def test_treasure_button_argument_and_menu(plugin):
     main, p, tmp = plugin
     _run(_gather(p.cmd_yangyu(FakeEvent(message_str="/寻宝"))))
-    inter = types.SimpleNamespace(action_id="dfy:寻宝|探路|接力", data={"cmd": "/养鱼 寻宝 探路",
-                                 "act": "寻宝", "arg": "探路"})
+    inter = types.SimpleNamespace(
+        action_id="dfy:寻宝|探路|接力",
+        data={"cmd": "/养鱼 寻宝 探路", "act": "寻宝", "arg": "探路"},
+    )
     results = _run(_gather(p.on_button(FakeEvent(interaction=inter))))
     assert any("完成了探路" in text for text in _texts(results[-1]))
     assert "u1" in _saved_state(tmp)["pending_treasure"]["got"]
@@ -490,12 +595,19 @@ def test_treasure_button_argument_and_menu(plugin):
     assert any("猜鱼" in text for text in _texts(results[-1]))
 
 
-@pytest.mark.parametrize("raw", [
-    {"author": {"member_nickname": " 群昵称 ", "username": "QQ昵称"}},
-    types.SimpleNamespace(author=types.SimpleNamespace(member_nickname="群昵称", username="QQ昵称")),
-    types.SimpleNamespace(raw_data={"author": {"member_nickname": "群昵称"}},
-                          author=types.SimpleNamespace(username="QQ昵称")),
-])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"author": {"member_nickname": " 群昵称 ", "username": "QQ昵称"}},
+        types.SimpleNamespace(
+            author=types.SimpleNamespace(member_nickname="群昵称", username="QQ昵称")
+        ),
+        types.SimpleNamespace(
+            raw_data={"author": {"member_nickname": "群昵称"}},
+            author=types.SimpleNamespace(username="QQ昵称"),
+        ),
+    ],
+)
 def test_qq_group_nickname_auto_registers(plugin, raw):
     main, p, tmp = plugin
     ev = FakeEvent(name="", message_str="投喂")
@@ -517,8 +629,10 @@ def test_qq_c2c_name_fallback_and_manual_name(plugin):
     _run(_gather(p._dispatch(ev, "昵称", "小鱼友")))
     _run(_gather(p._dispatch(ev, "养鱼")))
     assert _saved_state(tmp)["users"]["u1"]["display_name"] == "小鱼友"
-    ev.message_obj.raw_message = {"author": {"username": None, "member_nickname": " "},
-                                  "mentions": [{"member_nickname": "别人的昵称"}]}
+    ev.message_obj.raw_message = {
+        "author": {"username": None, "member_nickname": " "},
+        "mentions": [{"member_nickname": "别人的昵称"}],
+    }
     assert main._sender_name(ev) == ""
     ev._name = "框架昵称"
     assert main._sender_name(ev) == "框架昵称"
@@ -540,7 +654,9 @@ def test_adventure_text_choice_and_new_commands(plugin, prefix):
     main, p, tmp = plugin
     _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "奇遇"))))
     game = _saved_state(tmp)["pending_adventure"]
-    results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "奇遇 帮忙@" + game["token"]))))
+    results = _run(
+        _gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "奇遇 帮忙@" + game["token"])))
+    )
     assert any("纪念物" in text for text in _texts(results[-1]))
     assert _saved_state(tmp)["pending_adventure"] is None
     results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "纪念物"))))
@@ -616,7 +732,9 @@ def test_weekly_commands_and_care_button(plugin, prefix):
 
 
 @pytest.mark.parametrize("markdown", [True, False])
-@pytest.mark.parametrize("command", ["养鱼", "小游戏", "猜鱼", "奇遇", "寻宝", "心愿", "建设", "运动会", "委托"])
+@pytest.mark.parametrize(
+    "command", ["养鱼", "小游戏", "猜鱼", "奇遇", "寻宝", "心愿", "建设", "运动会", "委托"]
+)
 def test_reply_format_marker_preserves_all_cards(plugin, markdown, command):
     main, p, tmp = plugin
     p._md_mode = markdown
@@ -627,9 +745,11 @@ def test_reply_format_marker_preserves_all_cards(plugin, markdown, command):
     results = _run(_gather(p.cmd_yangyu(event)))
     assert extra.get("reply_keep_format") is True
     original = "".join(_texts(results[-1]))
+
     # Replay the consumer contract: unmarked replies are flattened.
     def single_line_reply(text, metadata):
         return text if metadata.get("reply_keep_format") else " ".join(text.split())
+
     assert "\n" in original
     assert single_line_reply(original, extra) == original
     assert "\n" not in single_line_reply(original, {})

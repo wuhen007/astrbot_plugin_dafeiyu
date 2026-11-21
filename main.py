@@ -10,6 +10,7 @@
 - 名号：优先采用平台昵称，未收到时引导，直接回复昵称文本即可登记（_pending +
   ALL 消息监听器），也可用「养鱼 昵称 名字」/「养鱼 跳过」
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,7 +46,8 @@ if "scene" not in _inspect.signature(render_card_png).parameters:
     raise RuntimeError(
         "[肥鱼养成记] 插件文件不完整（检测到旧版 render/fishimg.py）。"
         "请备份存档后，从仓库下载完整插件文件并覆盖安装，随后重载插件。"
-        "请确认 main.py、game/ 和 render/ 来自同一版本。")
+        "请确认 main.py、game/ 和 render/ 来自同一版本。"
+    )
 
 # ---------------------------------------------------------------- 版本兼容层
 _button_dec = None
@@ -68,6 +70,7 @@ try:
 except ImportError:
     try:
         from astrbot.api.event import filter as _v3_filter  # noqa: E402
+
         _command_dec = _v3_filter.command
     except ImportError:
         pass
@@ -83,37 +86,66 @@ except ImportError:
 if Button is not None:
     try:
         from astrbot.api.message_components import CallbackAction as _CA  # noqa: E402
+
         CallbackAction = _CA
     except ImportError:
         CallbackAction = getattr(Button, "CallbackAction", None)
 _HAS_BUTTONS = all(c is not None for c in (ActionRow, Button, CallbackAction))
 
 # ---------------------------------------------------------------- 常量
-_ACTION_KEYS = tuple(sorted((key for key in COMMANDS if key != "养鱼"),
-                            key=len, reverse=True))
+_ACTION_KEYS = tuple(sorted((key for key in COMMANDS if key != "养鱼"), key=len, reverse=True))
 _BASE_CMDS = set(COMMANDS) | {"养鱼"}
 _SAFE_BARE_ALIASES = {"投喂", "加餐", "逗鱼", "净水", "玩耍", "称重", "出栏", "再养一条"}
-_ALIAS_NAMES = _SAFE_BARE_ALIASES | {f"{prefix}{key}" for key in _BASE_CMDS
-                                     for prefix in ("/", "#")}
+_ALIAS_NAMES = _SAFE_BARE_ALIASES | {
+    f"{prefix}{key}" for key in _BASE_CMDS for prefix in ("/", "#")
+}
 _ACTION_RE = re.compile("(" + "|".join(re.escape(key) for key in _ACTION_KEYS) + ")")
 _NICK_ARG_RE = re.compile("(?:昵称|改名)\\s*(.+)$")
 _SHELL_RE = re.compile("玩耍\\s*([123①②③])")
 _BTN_PREFIX = "dfy:"
-_NICK_TTL = 180.0          # 登记引导的有效期（秒），过期重新引导
+_NICK_TTL = 180.0  # 登记引导的有效期（秒），过期重新引导
 _NICK_CLEAN_INTERVAL = 60.0
 _NICK_MAX = 12
 _POND_CACHE_MAX = 200
 
 _VERSION_MATCH = re.search(
-    r"(?m)^version:\s*[\"']?([^\"'\s]+)",
-    (PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8"))
+    r"(?m)^version:\s*[\"']?([^\"'\s]+)", (PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
+)
 if not _VERSION_MATCH:
     raise RuntimeError("[肥鱼养成记] metadata.yaml 缺少 version")
 _PLUGIN_VERSION = _VERSION_MATCH.group(1)
 
 
+def _mentions_bot(event) -> bool:
+    message = getattr(event, "message_obj", None)
+    bot_id = str(getattr(message, "self_id", "") or "")
+    getter = getattr(event, "get_self_id", None)
+    if not bot_id and getter:
+        bot_id = str(getter() or "")
+    get_messages = getattr(event, "get_messages", None)
+    components = get_messages() if get_messages else getattr(message, "message", ())
+    for component in components or ():
+        data = getattr(component, "data", None)
+        kind = str(getattr(component, "type", "") or type(component).__name__).lower()
+        target = getattr(component, "qq", None) or (
+            data.get("qq") if isinstance(data, dict) else None
+        )
+        if "at" in kind and target is not None and str(target) == bot_id and bot_id:
+            return True
+    raw = getattr(message, "raw_message", None)
+    if isinstance(raw, dict):
+        raw_data = raw.get("raw_data") or raw
+        for item in raw_data.get("message", ()) if isinstance(raw_data, dict) else ():
+            if isinstance(item, dict) and item.get("type") == "at":
+                target = (item.get("data") or {}).get("qq")
+                if bot_id and str(target) == bot_id:
+                    return True
+    return False
+
+
 def _sender_name(event) -> str:
     """读取 QQ 新昵称字段，兼容 SDK 对象和保留的原始字典。"""
+
     def field(value, key):
         return value.get(key) if isinstance(value, dict) else getattr(value, key, None)
 
@@ -130,14 +162,16 @@ def _sender_name(event) -> str:
 
 
 _DIFF_SCALE = {"休闲": 0.7, "标准": 1.0, "硬核": 1.4}
-_BTN_TIMEOUT = 86400       # 指令按钮无过期需求，给足 24h；fallback_text 兜底
+_BTN_TIMEOUT = 86400  # 指令按钮无过期需求，给足 24h；fallback_text 兜底
 _LABEL_MAX = 16
-_MAX_BTN_ROWS = 5          # QQ 内联键盘最多 5 行
-_MAX_BTN_PER_ROW = 5       # QQ 内联键盘每行最多 5 个
+_MAX_BTN_ROWS = 5  # QQ 内联键盘最多 5 行
+_MAX_BTN_PER_ROW = 5  # QQ 内联键盘每行最多 5 个
 
 # 免费文本回昵称时，跳过这些指令开头（避免把指令当昵称吞掉）
-_CMD_HEADS = tuple(sorted({f"{p}{k}" for k in _BASE_CMDS for p in ("", "/", "#")},
-                          key=len, reverse=True))
+_CMD_HEADS = tuple(
+    sorted({f"{p}{k}" for k in _BASE_CMDS for p in ("", "/", "#")}, key=len, reverse=True)
+)
+
 
 def md_text(text: str) -> str:
     """用 Markdown 硬换行保留分行，不额外插入空段落。"""
@@ -147,6 +181,7 @@ def md_text(text: str) -> str:
 def _default_data_dir() -> Path:
     try:
         from astrbot.api.star import StarTools
+
         p = StarTools.get_data_dir("astrbot_plugin_dafeiyu")
         if isinstance(p, (str, Path)):
             return Path(p)
@@ -162,9 +197,10 @@ def _build_keyboard_locally(rows_components) -> dict:
     style_cls = getattr(Button, "Style", None)
     style_map = {}
     if style_cls is not None:
-        style_map = {getattr(style_cls, n, None): v
-                     for n, v in (("DEFAULT", 0), ("PRIMARY", 3),
-                                  ("SUCCESS", 1), ("DANGER", 0))}
+        style_map = {
+            getattr(style_cls, n, None): v
+            for n, v in (("DEFAULT", 0), ("PRIMARY", 3), ("SUCCESS", 1), ("DANGER", 0))
+        }
         style_map.pop(None, None)
     out_rows = []
     for row in rows_components:
@@ -173,14 +209,23 @@ def _build_keyboard_locally(rows_components) -> dict:
             data = getattr(btn.action, "data", None) or {}
             cmd = str(data.get("cmd") or "")
             label = str(btn.label)[:16]
-            buttons.append({
-                "id": str(btn.id)[:64],
-                "render_data": {"label": label, "visited_label": label,
-                                "style": style_map.get(btn.style, 0)},
-                "action": {"type": 2, "permission": {"type": 2}, "data": cmd,
-                           "enter": True,
-                           "unsupport_tips": f"请直接发送：{cmd}"},
-            })
+            buttons.append(
+                {
+                    "id": str(btn.id)[:64],
+                    "render_data": {
+                        "label": label,
+                        "visited_label": label,
+                        "style": style_map.get(btn.style, 0),
+                    },
+                    "action": {
+                        "type": 2,
+                        "permission": {"type": 2},
+                        "data": cmd,
+                        "enter": True,
+                        "unsupport_tips": f"请直接发送：{cmd}",
+                    },
+                }
+            )
         out_rows.append({"buttons": buttons})
     return {"content": {"rows": out_rows}}
 
@@ -200,12 +245,12 @@ def _install_command_button_patch() -> bool:
     original = Target._parse_keyboard
 
     def shim(message_chain):
-        rows = [c for c in message_chain.chain
-                if isinstance(c, ActionRow) and c.buttons]
+        rows = [c for c in message_chain.chain if isinstance(c, ActionRow) and c.buttons]
         all_buttons = [b for r in rows for b in r.buttons]
         ours = bool(all_buttons) and all(
-            isinstance(getattr(b.action, "data", None), dict)
-            and b.action.data.get("cmd") for b in all_buttons)
+            isinstance(getattr(b.action, "data", None), dict) and b.action.data.get("cmd")
+            for b in all_buttons
+        )
         if ours:
             try:
                 payload = _build_keyboard_locally(rows)
@@ -224,11 +269,17 @@ def _install_command_button_patch() -> bool:
 
 
 _patch_ok = _install_command_button_patch()
-logger.info("[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰器=%s 按钮装饰器=%s 昵称监听=%s",
-            _HAS_BUTTONS, _command_dec is not None, _button_dec is not None,
-            _emt_dec is not None)
-logger.info("[肥鱼养成记] 指令按钮补丁（点按钮=发指令）：%s",
-            "已安装" if _patch_ok else "不可用（退回回调交互按钮）")
+logger.info(
+    "[肥鱼养成记] 模块导入完成：按钮组件=%s 指令装饰器=%s 按钮装饰器=%s 昵称监听=%s",
+    _HAS_BUTTONS,
+    _command_dec is not None,
+    _button_dec is not None,
+    _emt_dec is not None,
+)
+logger.info(
+    "[肥鱼养成记] 指令按钮补丁（点按钮=发指令）：%s",
+    "已安装" if _patch_ok else "不可用（退回回调交互按钮）",
+)
 
 
 def _make_yangyu_decorator():
@@ -242,8 +293,12 @@ def _make_yangyu_decorator():
         return _command_dec("养鱼")
 
 
-@register("astrbot_plugin_dafeiyu", "wuhen007",
-          "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算", _PLUGIN_VERSION)
+@register(
+    "astrbot_plugin_dafeiyu",
+    "wuhen007",
+    "肥鱼养成记：全群共养一条大肥鱼，养成出栏结算",
+    _PLUGIN_VERSION,
+)
 class DaFeiYuPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         self.context = context
@@ -264,7 +319,7 @@ class DaFeiYuPlugin(Star):
         data_dir = Path(raw.get("data_dir") or _default_data_dir())
         self._store = JsonStore(data_dir / "ponds")
         self._image_dir = data_dir / "images"
-        self._custom_img_dir = data_dir / "fish_imgs"   # 手动贴图（优先级最高）
+        self._custom_img_dir = data_dir / "fish_imgs"  # 手动贴图（优先级最高）
         self._sticker_enabled = raw.get("sticker_enabled", True)
         self._sticker_api = raw.get("sticker_api", "https://fisharchive.cc/stickers/index.json")
         self._sticker_dir = data_dir / "stickers"
@@ -272,11 +327,16 @@ class DaFeiYuPlugin(Star):
         self._ponds = OrderedDict()
         self._pond_cache_lock = threading.Lock()
         self._locks = WeakValueDictionary()
-        self._pending = {}      # (session, uid) -> 登记引导截止时刻
+        self._pending = {}  # (session, uid) -> 登记引导截止时刻
         self._pending_cleanup_at = 0.0
-        logger.info("[肥鱼养成记] 已加载：输出=%s 画图=%s 贴图=%s 难度=%s 存档=%s",
-                    "markdown" if self._md_mode else "text", self._send_image,
-                    self._sticker_enabled, raw.get("difficulty", "标准"), data_dir)
+        logger.info(
+            "[肥鱼养成记] 已加载：输出=%s 画图=%s 贴图=%s 难度=%s 存档=%s",
+            "markdown" if self._md_mode else "text",
+            self._send_image,
+            self._sticker_enabled,
+            raw.get("difficulty", "标准"),
+            data_dir,
+        )
 
     async def terminate(self):
         pass
@@ -287,8 +347,9 @@ class DaFeiYuPlugin(Star):
         with self._pond_cache_lock:
             pond = self._ponds.get(session)
             if pond is None:
-                pond = load_or_create(self._store, session, config=self._cfg,
-                                      clock=time.time, rng=random.Random())
+                pond = load_or_create(
+                    self._store, session, config=self._cfg, clock=time.time, rng=random.Random()
+                )
                 self._ponds[session] = pond
                 if len(self._ponds) > _POND_CACHE_MAX:
                     self._ponds.popitem(last=False)
@@ -301,12 +362,14 @@ class DaFeiYuPlugin(Star):
         imgs = []
         try:
             if self._custom_img_dir.is_dir():
-                imgs = [p for p in self._custom_img_dir.iterdir()
-                        if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp")]
+                imgs = [
+                    p
+                    for p in self._custom_img_dir.iterdir()
+                    if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp")
+                ]
             if imgs:
                 # fish_imgs 里可能混有 webp：统一转 PNG 再发（QQ 富媒体不支持 webp）
-                return sticker_src.ensure_png(str(random.choice(imgs)),
-                                              self._sticker_dir / "img")
+                return sticker_src.ensure_png(str(random.choice(imgs)), self._sticker_dir / "img")
         except Exception as e:
             logger.warning(f"[肥鱼养成记] 自定义鱼图读取失败：{e}")
         return None
@@ -329,11 +392,22 @@ class DaFeiYuPlugin(Star):
         "rescue": (["震惊", "无语"], ["救", "缠"]),
         "wish": (["卖萌"], ["愿", "星"]),
     }
-    _STICKER_TITLE_KEY = {"投喂": "feed", "加餐": "snack", "逗鱼": "pet",
-                          "净水": "clean", "称重": "weigh", "稍等一下": "cooldown",
-                          "套圈小游戏": "play_open", "套圈": "play",
-                          "名号登记": "pet", "每日打卡": "sign", "钓鱼": "fishing",
-                          "求援中": "rescue", "救援成功": "sign", "许愿池": "wish"}
+    _STICKER_TITLE_KEY = {
+        "投喂": "feed",
+        "加餐": "snack",
+        "逗鱼": "pet",
+        "净水": "clean",
+        "称重": "weigh",
+        "稍等一下": "cooldown",
+        "套圈小游戏": "play_open",
+        "套圈": "play",
+        "名号登记": "pet",
+        "每日打卡": "sign",
+        "钓鱼": "fishing",
+        "求援中": "rescue",
+        "救援成功": "sign",
+        "许愿池": "wish",
+    }
 
     def _sticker_key(self, result) -> str:
         if result.event in ("panel", "graduated", "runaway", "need_nick"):
@@ -354,12 +428,12 @@ class DaFeiYuPlugin(Star):
             fish = pond.state.fish
             seed = f"{key}|{round(fish.satiety)}|{round(fish.mood)}|{round(fish.weight)}"
             manifest = sticker_src.load_manifest(self._sticker_dir)
-            s = sticker_src.pick_sticker(stickers, tags, kws, random.Random(seed),
-                                         cached_urls=set(manifest))
+            s = sticker_src.pick_sticker(
+                stickers, tags, kws, random.Random(seed), cached_urls=set(manifest)
+            )
             if not s:
                 return None
-            return sticker_src.download_sticker(s, self._sticker_dir / "img",
-                                                manifest=manifest)
+            return sticker_src.download_sticker(s, self._sticker_dir / "img", manifest=manifest)
         except Exception as e:
             if not self._sticker_warned:
                 self._sticker_warned = True
@@ -368,8 +442,7 @@ class DaFeiYuPlugin(Star):
 
     def _fallback_fish(self, session: str, pond: Pond) -> str:
         h = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
-        return render_fish_png(pond.state, str(self._image_dir / f"{h}.png"),
-                               config=pond.cfg)
+        return render_fish_png(pond.state, str(self._image_dir / f"{h}.png"), config=pond.cfg)
 
     def _md(self, text: str) -> str:
         return md_text(text)
@@ -400,7 +473,7 @@ class DaFeiYuPlugin(Star):
         # 加宽到 4~5 个，保证总行数不越过 5 行。
         if items:
             per_row = min(_MAX_BTN_PER_ROW, max(3, -(-len(items) // _MAX_BTN_ROWS)))
-            chunks = [items[i:i + per_row] for i in range(0, len(items), per_row)]
+            chunks = [items[i : i + per_row] for i in range(0, len(items), per_row)]
             if len(chunks) > _MAX_BTN_ROWS:
                 kept = chunks[:_MAX_BTN_ROWS]
                 dropped = [i for chunk in chunks[_MAX_BTN_ROWS:] for i in chunk]
@@ -414,16 +487,18 @@ class DaFeiYuPlugin(Star):
         for chunk in chunks:
             buttons = []
             for ident, label, data in chunk:
-                kw = {"id": ident, "label": label,
-                      "action": CallbackAction(data=data)}
+                kw = {"id": ident, "label": label, "action": CallbackAction(data=data)}
                 if style_default is not None:
                     kw["style"] = style_default
                 buttons.append(Button(**kw))
-            rows.append(ActionRow(
-                buttons=buttons,
-                fallback_text=" / ".join(f"[{label}]" for _, label, _ in chunk)
-                + "（按钮失效请发送文字指令）",
-                action_timeout=_BTN_TIMEOUT))
+            rows.append(
+                ActionRow(
+                    buttons=buttons,
+                    fallback_text=" / ".join(f"[{label}]" for _, label, _ in chunk)
+                    + "（按钮失效请发送文字指令）",
+                    action_timeout=_BTN_TIMEOUT,
+                )
+            )
         return rows
 
     def _build_result(self, event, result):
@@ -451,7 +526,7 @@ class DaFeiYuPlugin(Star):
     async def _dispatch(self, event, command: str, arg=None):
         try:
             uid = str(event.get_sender_id() or "anon")
-            name = _sender_name(event)   # 未收到昵称时引导登记名号
+            name = _sender_name(event)  # 未收到昵称时引导登记名号
             session = event.unified_msg_origin
             lock = self._locks.setdefault(session, asyncio.Lock())
             async with lock:
@@ -461,28 +536,41 @@ class DaFeiYuPlugin(Star):
                 # 引导免费文本回昵称（180s 内的下一条非指令消息即登记）
                 now = time.time()
                 if now >= self._pending_cleanup_at:
-                    self._pending = {key: deadline for key, deadline in self._pending.items()
-                                     if deadline > now}
+                    self._pending = {
+                        key: deadline for key, deadline in self._pending.items() if deadline > now
+                    }
                     self._pending_cleanup_at = now + _NICK_CLEAN_INTERVAL
                 self._pending[(session, uid)] = now + _NICK_TTL
+                try:
+                    event.stop_event()
+                except Exception:
+                    pass
             elif pond.state.users.get(uid) and pond.state.users[uid].nick_set:
                 self._pending.pop((session, uid), None)
             # ① 贴图原图直发（不合成背景）；交互事件不发图
-            if self._send_image and Image is not None \
-                    and event.get_button_interaction() is None:
+            if self._send_image and Image is not None and event.get_button_interaction() is None:
                 try:
                     image_key = hashlib.md5(session.encode("utf-8")).hexdigest()[:10]
                     if result.data.get("memorial"):
-                        custom = await asyncio.to_thread(render_memorial_png, result.data["memorial"],
-                                                         str(self._image_dir / f"{image_key}-memorial.png"), pond.cfg)
+                        custom = await asyncio.to_thread(
+                            render_memorial_png,
+                            result.data["memorial"],
+                            str(self._image_dir / f"{image_key}-memorial.png"),
+                            pond.cfg,
+                        )
                     else:
                         custom = await asyncio.to_thread(self._get_sticker, result, pond)
                         if custom is None:
                             custom = await asyncio.to_thread(self._pick_custom_img)
                         if completed(pond.state.decorations):
-                            custom = await asyncio.to_thread(render_card_png, pond.state,
+                            custom = await asyncio.to_thread(
+                                render_card_png,
+                                pond.state,
                                 ["大家共建的鱼塘：" + "、".join(completed(pond.state.decorations))],
-                                str(self._image_dir / f"{image_key}-decor.png"), pond.cfg, custom)
+                                str(self._image_dir / f"{image_key}-decor.png"),
+                                pond.cfg,
+                                custom,
+                            )
                         elif custom is None:
                             custom = await asyncio.to_thread(self._fallback_fish, session, pond)
                     if custom:
@@ -512,13 +600,56 @@ class DaFeiYuPlugin(Star):
             if sub in ("昵称", "改名"):
                 m2 = _NICK_ARG_RE.search(text)
                 arg = m2.group(1).strip() if m2 else None
-            elif sub in ("猜鱼", "寻宝", "奇遇", "游历", "建设", "装修", "纪念册", "合影", "运动会", "性格", "委托", "周报"):
-                arg = text[act.end():].strip() or None
+            elif sub in (
+                "猜鱼",
+                "寻宝",
+                "奇遇",
+                "游历",
+                "建设",
+                "装修",
+                "纪念册",
+                "合影",
+                "运动会",
+                "性格",
+                "委托",
+                "周报",
+            ):
+                arg = text[act.end() :].strip() or None
         async for res in self._dispatch(event, sub, arg):
             yield res
 
     # ------------------------------------------------------------ 名号登记（免费文本）
     if _emt_dec is not None and _EMT is not None:
+
+        @_emt_dec(_EMT.ALL, priority=101)
+        async def on_chat_reward(self, event: AstrMessageEvent):
+            try:
+                session = event.unified_msg_origin
+                if "GroupMessage" not in str(session):
+                    return
+                uid = str(event.get_sender_id() or "")
+                if not uid:
+                    return
+                text = (event.message_str or "").strip()
+                mentioned = _mentions_bot(event)
+                if (
+                    (not text and not mentioned)
+                    or text.startswith(_CMD_HEADS)
+                    or event.get_button_interaction() is not None
+                ):
+                    return
+                if "大肥鱼" not in text and not mentioned:
+                    return
+                lock = self._locks.setdefault(session, asyncio.Lock())
+                async with lock:
+                    pond = await asyncio.to_thread(self._get_pond, event)
+                    reward = await asyncio.to_thread(pond.chat_reward, uid, _sender_name(event))
+                if reward:
+                    item = "白饭" if reward == "rice" else "Token"
+                    yield event.plain_result(f"和大肥鱼聊得开心，获得了 {item} ×1！")
+            except Exception:
+                logger.exception("[肥鱼养成记] 群聊奖励处理失败")
+
         @_emt_dec(_EMT.ALL, priority=100)
         async def on_nickname_reply(self, event: AstrMessageEvent):
             try:
@@ -532,7 +663,7 @@ class DaFeiYuPlugin(Star):
                     return
                 text = (event.message_str or "").strip()
                 if not text or text.startswith(_CMD_HEADS):
-                    return          # 指令不吞，走正常指令管线
+                    return  # 指令不吞，走正常指令管线
                 self._pending.pop((cid, uid), None)
                 try:
                     event.stop_event()
@@ -550,6 +681,7 @@ class DaFeiYuPlugin(Star):
 
     # ------------------------------------------------------------ 按钮回调（兜底：补丁未生效时走交互）
     if _button_dec is not None:
+
         @_button_dec()
         async def on_button(self, event: AstrMessageEvent):
             try:
