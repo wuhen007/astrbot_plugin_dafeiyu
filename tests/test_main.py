@@ -244,6 +244,12 @@ def test_group_chat_reward_requires_mention_or_name(plugin, monkeypatch):
     results = _run(_gather(p.on_chat_reward(event)))
     assert _texts(results[0]) == [expected]
     assert pond.state.users["u2"].rice == 6
+    for index, nickname in enumerate(("肥鱼", "鲸鱼", "小鲸鱼", "小肥鱼"), start=3):
+        event._uid = f"alias-{index}"
+        event.message_str = f"{nickname}今天真开心"
+        results = _run(_gather(p.on_chat_reward(event)))
+        assert _texts(results[0]) == [expected]
+        assert pond.state.users[event._uid].rice == 6
 
 
 def test_chat_reward_cooldown_daily_cap_and_legacy_user(plugin, monkeypatch):
@@ -519,7 +525,7 @@ def test_metadata_is_single_version_source_and_contains_market_fields(plugin):
     main, p, tmp = plugin
     text = (main.PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
     assert f'version: "{main._PLUGIN_VERSION}"' in text
-    assert main._PLUGIN_VERSION == "2.2.0"
+    assert main._PLUGIN_VERSION == "2.2.1"
     assert "display_name:" in text and "support_platforms:" in text
 
 

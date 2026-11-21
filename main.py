@@ -107,6 +107,7 @@ _NICK_TTL = 180.0  # 登记引导的有效期（秒），过期重新引导
 _NICK_CLEAN_INTERVAL = 60.0
 _NICK_MAX = 12
 _POND_CACHE_MAX = 200
+_CHAT_REWARD_NAMES = ("大肥鱼", "小鲸鱼", "小肥鱼", "鲸鱼", "肥鱼")
 
 _VERSION_MATCH = re.search(
     r"(?m)^version:\s*[\"']?([^\"'\s]+)", (PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
@@ -638,7 +639,7 @@ class DaFeiYuPlugin(Star):
                     or event.get_button_interaction() is not None
                 ):
                     return
-                if "大肥鱼" not in text and not mentioned:
+                if not any(name in text for name in _CHAT_REWARD_NAMES) and not mentioned:
                     return
                 lock = self._locks.setdefault(session, asyncio.Lock())
                 async with lock:
