@@ -132,6 +132,8 @@ def _sender_name(event) -> str:
 _DIFF_SCALE = {"休闲": 0.7, "标准": 1.0, "硬核": 1.4}
 _BTN_TIMEOUT = 86400       # 指令按钮无过期需求，给足 24h；fallback_text 兜底
 _LABEL_MAX = 16
+_MAX_BTN_ROWS = 5          # QQ 内联键盘最多 5 行
+_MAX_BTN_PER_ROW = 5       # QQ 内联键盘每行最多 5 个
 
 # 免费文本回昵称时，跳过这些指令开头（避免把指令当昵称吞掉）
 _CMD_HEADS = tuple(sorted({f"{p}{k}" for k in _BASE_CMDS for p in ("", "/", "#")},
@@ -393,8 +395,23 @@ class DaFeiYuPlugin(Star):
             ident = f"{_BTN_PREFIX}{act}|{arg or ''}|{label}"[:64]
             items.append((ident, label, {"cmd": cmd, "act": act, "arg": arg}))
         rows = []
-        for i in range(0, len(items), 3):
-            chunk = items[i:i + 3]
+        # QQ 官方内联键盘上限：最多 5 行、每行最多 5 个按钮（超了报 40034029
+        # 「内联键盘行/列超限」）。按钮少时保持每行 3 个更好点；按钮多时自动
+        # 加宽到 4~5 个，保证总行数不越过 5 行。
+        if items:
+            per_row = min(_MAX_BTN_PER_ROW, max(3, -(-len(items) // _MAX_BTN_ROWS)))
+            chunks = [items[i:i + per_row] for i in range(0, len(items), per_row)]
+            if len(chunks) > _MAX_BTN_ROWS:
+                kept = chunks[:_MAX_BTN_ROWS]
+                dropped = [i for chunk in chunks[_MAX_BTN_ROWS:] for i in chunk]
+                chunks = kept
+                logger.warning(
+                    f"[dafeiyu] 按钮 {len(items)} 个超过 {_MAX_BTN_ROWS} 行上限，"
+                    f"已省略 {len(dropped)} 个：{[d[1] for d in dropped]}"
+                )
+        else:
+            chunks = []
+        for chunk in chunks:
             buttons = []
             for ident, label, data in chunk:
                 kw = {"id": ident, "label": label,
