@@ -63,6 +63,17 @@ def test_sign_result_hides_completed_action_but_keeps_navigation():
     assert any(label.endswith("小游戏") for label in labels)
 
 
+def test_travel_buttons_do_not_expose_internal_token():
+    pond, _ = make_pond()
+    card = pond._travel_card(
+        {"step": 0, "steps": 3, "token": "1795253606138"}
+    )
+    assert [button.command for button in card.buttons] == [
+        "养鱼 游历 1",
+        "养鱼 游历 2",
+    ]
+
+
 def test_pet_clean_snack():
     pond, clock = make_pond()
     r = pond.handle("u1", "小明", "逗鱼")

@@ -495,8 +495,10 @@ class DaFeiYuPlugin(Star):
             rows.append(
                 ActionRow(
                     buttons=buttons,
-                    fallback_text=" / ".join(f"[{label}]" for _, label, _ in chunk)
-                    + "（按钮失效请发送文字指令）",
+                    fallback_text="按钮不可用，请发送对应指令：\n"
+                    + "\n".join(
+                        f"{label}：{data['cmd']}" for _, label, data in chunk
+                    ),
                     action_timeout=_BTN_TIMEOUT,
                 )
             )

@@ -382,6 +382,7 @@ def test_button_rows_layout(plugin):
     assert b0.id.startswith("dfy:")
     assert b0.action.data["cmd"] == "/养鱼 投喂"
     assert b0.action.data["act"] == "投喂"
+    assert "🍚 投喂：/养鱼 投喂" in rows[0].fallback_text
     assert rows[0].action_timeout == 86400
 
 
@@ -525,8 +526,9 @@ def test_metadata_is_single_version_source_and_contains_market_fields(plugin):
     main, p, tmp = plugin
     text = (main.PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
     assert f'version: "{main._PLUGIN_VERSION}"' in text
-    assert main._PLUGIN_VERSION == "2.2.1"
+    assert main._PLUGIN_VERSION == "2.2.2"
     assert "display_name:" in text and "support_platforms:" in text
+    assert "  - aiocqhttp" in text
 
 
 def test_missing_custom_image_directory_is_a_normal_fallback(plugin, caplog, tmp_path):

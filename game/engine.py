@@ -1534,8 +1534,8 @@ class Pond:
         text = lines or [f"第 {step}/{game['steps']} 段：来到{scene}，选一条路继续。"]
         text.append("旅程中的选择会带回白饭或 Token，也可能遇见朋友。")
         buttons = [
-            Button(left, f"养鱼 游历 1@{game['token']}"),
-            Button(right, f"养鱼 游历 2@{game['token']}"),
+            Button(left, "养鱼 游历 1"),
+            Button(right, "养鱼 游历 2"),
         ]
         return ActionResult(
             event="game_open",
