@@ -64,7 +64,11 @@ class UserInfo:
     nick_set: bool = False     # 是否已登记名号（未登记时照料动作会被引导登记）
     intimacy: int = 0          # 与当前这条鱼的亲密（换鱼重置）
     total_interactions: int = 0
-    snacks: int = 0            # 海苔片钱包（跨鱼保留）
+    snacks: int = 0            # 绝版海苔，仅保留旧库存
+    rice: int = 0
+    tokens: int = 0
+    travel_tickets: int = 0
+    liangdi_seen: bool = False
     last_bonus_day: Optional[str] = None
     last_sign_day: Optional[str] = None   # 最后打卡日（YYYY-MM-DD）
     sign_streak: int = 0                  # 连续打卡天数
@@ -81,6 +85,9 @@ class UserInfo:
             "display_name": self.display_name, "nick_set": self.nick_set,
             "intimacy": self.intimacy,
             "total_interactions": self.total_interactions, "snacks": self.snacks,
+            "rice": self.rice,
+            "tokens": self.tokens, "travel_tickets": self.travel_tickets,
+            "liangdi_seen": self.liangdi_seen,
             "last_bonus_day": self.last_bonus_day,
             "last_sign_day": self.last_sign_day, "sign_streak": self.sign_streak,
             "last_guess_at": self.last_guess_at,
@@ -100,6 +107,10 @@ class UserInfo:
             intimacy=int(d.get("intimacy", 0)),
             total_interactions=int(d.get("total_interactions", 0)),
             snacks=int(d.get("snacks", 0)),
+            rice=int(d.get("rice", 0)),
+            tokens=int(d.get("tokens", 0)),
+            travel_tickets=int(d.get("travel_tickets", 0)),
+            liangdi_seen=bool(d.get("liangdi_seen", False)),
             last_bonus_day=d.get("last_bonus_day"),
             last_sign_day=d.get("last_sign_day"),
             sign_streak=int(d.get("sign_streak", 0)),
@@ -131,6 +142,7 @@ class PondState:
     pending_guess: Dict[str, Dict] = field(default_factory=dict)
     pending_treasure: Optional[Dict] = None
     pending_adventure: Optional[Dict] = None
+    pending_travel: Optional[Dict] = None
     daily_heartwish: Optional[Dict] = None
     story_flags: List[str] = field(default_factory=list)
     decorations: Dict[str, Dict[str, int]] = field(default_factory=dict)
@@ -154,6 +166,7 @@ class PondState:
             "pending_guess": dict(self.pending_guess),
             "pending_treasure": self.pending_treasure,
             "pending_adventure": self.pending_adventure,
+            "pending_travel": self.pending_travel,
             "daily_heartwish": self.daily_heartwish,
             "story_flags": list(self.story_flags),
             "decorations": self.decorations, "round_stats": self.round_stats,
@@ -180,6 +193,7 @@ class PondState:
             pending_guess=dict(d.get("pending_guess") or {}),
             pending_treasure=d.get("pending_treasure"),
             pending_adventure=d.get("pending_adventure"),
+            pending_travel=d.get("pending_travel"),
             daily_heartwish=d.get("daily_heartwish"),
             story_flags=list(d.get("story_flags") or []),
             decorations=dict(d.get("decorations") or {}),

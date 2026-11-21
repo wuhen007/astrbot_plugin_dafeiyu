@@ -20,6 +20,7 @@ def pond():
 
 
 def care(p, command, uid="a"):
+    p.state.users.setdefault(uid, UserInfo(display_name=uid, nick_set=True)).rice = 100
     p.state.fish.cooldowns.clear()
     for user in p.state.users.values():
         user.cooldowns.clear()

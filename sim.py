@@ -14,10 +14,23 @@ import argparse
 import random
 import sys
 import time
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+
+try:
+    import astrbot.api
+    _api = astrbot.api
+except ModuleNotFoundError:
+    _astrbot = types.ModuleType("astrbot")
+    _api = types.ModuleType("astrbot.api")
+    _api.logger = types.SimpleNamespace(error=lambda *args, **kwargs: None,
+                                        warning=lambda *args, **kwargs: None)
+    _astrbot.api = _api
+    sys.modules["astrbot"] = _astrbot
+    sys.modules["astrbot.api"] = _api
 
 from game import GameConfig, JsonStore, load_or_create  # noqa: E402
 from game.engine import Pond  # noqa: E402
@@ -99,6 +112,8 @@ def auto(cfg: GameConfig, data_dir: Path, use_md: bool, neglect: bool):
     clock, rng = FakeClock(), random.Random(42)
     pond = Pond.create("sim-auto", config=cfg, clock=clock, rng=rng)
     r = pond.handle("auto", "自动玩家", "养鱼")
+    if not neglect:
+        pond.state.users["auto"].rice = 1000
     show_card(pond, r, use_md)
 
     if neglect:

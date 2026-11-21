@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import actions, growth
+from . import actions, growth, travel
 from .adventures import STORIES
 from .config import FISH_NAMES, STAGE_NAMES, GameConfig
 from .decorations import DECORATIONS, completed
@@ -29,7 +29,7 @@ COMMANDS: Dict[str, str] = {
     "加餐": "snack",
     "逗鱼": "pet",
     "净水": "clean",
-    "玩耍": "play",
+    "玩耍": "play", "Token陪玩": "play_token",
     "称重": "weigh",
     "排行": "rank", "排行榜": "rank",
     "档案": "archive", "图鉴": "archive",
@@ -41,7 +41,7 @@ COMMANDS: Dict[str, str] = {
     "救援": "rescue",
     "许愿": "wish",
     "小游戏": "games", "猜鱼": "guess", "寻宝": "treasure",
-    "奇遇": "adventure", "心愿": "heartwish", "纪念物": "keepsakes",
+    "奇遇": "adventure", "游历": "travel", "心愿": "heartwish", "纪念物": "keepsakes",
     "建设": "build", "装修": "build", "纪念册": "memorial", "合影": "memorial",
     "运动会": "sports", "性格": "personality",
     "委托": "weekly", "周报": "weekly_reports",
@@ -53,14 +53,14 @@ HELP_LINES = (
     "· 自动采用平台昵称；未收到昵称时再登记，也可「养鱼 昵称 名字」自定义名号",
     "· 投喂/加餐补饱腹，逗鱼补心情，净水补洁净，玩耍赚体重但耗体力",
     "· 属性随现实时间自然衰减；同一动作连用收益递减，要换着花样来",
-    "· 每日「签到」领海苔片；「钓鱼」30 分钟一次碰运气；「许愿」花海苔片换增益",
+    "· 每日「签到」和「钓鱼」可获得白饭、Token；「许愿」消耗白饭换增益",
     "· 求援事件：鱼儿被困时全群点「救援」，凑齐人数有奖励，没人救它会难过",
     "· 「小游戏」查看新玩法：「猜鱼」猜数字（每人冷却30分钟）；「寻宝」三人依次探路/搬石/开箱（全塘冷却60分钟）",
     "· 「奇遇」每天每人一次，选路线收集「纪念物」；「心愿」查看今日全塘共同目标，照料时自动推进",
     "· 「建设」捐材料共建永久装饰；心愿完成时参与者、成功奇遇各得1份材料；「纪念册」翻看历史合影",
     "· 「性格」由本轮照料习惯形成；「运动会」每周参加一次，选项目比拼鱼的状态",
     "· 「委托」查看本周全塘共同目标，照料自动累计；「周报」翻看最近八期已完成记录",
-    "· 毕业出栏按贡献发海苔片；体重≥80 且心情≥60 且养成「大肥鱼」即可出栏",
+    "· 毕业出栏按贡献发放奖励；体重≥80 且心情≥60 且养成「大肥鱼」即可出栏",
     "· 饿太久或闷太久它会离家出走——记得常回来看看",
 )
 
@@ -234,6 +234,8 @@ class Pond:
             st.pending_treasure = None
         if st.pending_adventure and now >= st.pending_adventure["expires"]:
             st.pending_adventure = None
+        if st.pending_travel and now >= st.pending_travel["expires"]:
+            st.pending_travel = None
         return offline
 
     # -------------------------------------------------- 小工具
@@ -242,7 +244,7 @@ class Pond:
         if u is None:
             # 收到平台昵称直接登记，缺失时才引导。
             u = UserInfo(display_name=name or "", nick_set=bool(name),
-                         snacks=self.cfg.start_snacks)
+                         rice=self.cfg.start_rice)
             self.state.users[uid] = u
         elif name and not u.nick_set:
             u.display_name = name      # 平台后来补了昵称且未主动登记 → 采用
@@ -276,7 +278,8 @@ class Pond:
     def _main_buttons(self) -> List[Button]:
         btns = [
             Button("投喂", "养鱼 投喂"), Button("加餐", "养鱼 加餐"), Button("逗鱼", "养鱼 逗鱼"),
-            Button("净水", "养鱼 净水"), Button("玩耍", "养鱼 玩耍"), Button("称重", "养鱼 称重"),
+            Button("净水", "养鱼 净水"), Button("玩耍", "养鱼 玩耍"),
+            Button("Token陪玩", "养鱼 Token陪玩"), Button("称重", "养鱼 称重"),
             Button("养鱼", "养鱼"), Button("排行", "养鱼 排行"), Button("档案", "养鱼 档案"),
         ]
         pr = self.state.pending_rescue
@@ -285,6 +288,7 @@ class Pond:
                                "养鱼 救援"))
         btns.extend([
             Button("📅 签到", "养鱼 签到"), Button("🎣 钓鱼", "养鱼 钓鱼"),
+            Button("🧭 游历", "养鱼 游历"),
             Button("🙏 许愿", "养鱼 许愿"),
             Button("🎮 小游戏", "养鱼 小游戏"),
         ])
@@ -390,9 +394,9 @@ class Pond:
         day = time.strftime("%Y-%m-%d", time.localtime(now))
         if user.last_bonus_day != day:
             user.last_bonus_day = day
-            user.snacks += self.cfg.daily_bonus_snacks
-            deltas["海苔片"] = deltas.get("海苔片", 0.0) + self.cfg.daily_bonus_snacks
-            lines.append(f"顺手领了今日喂鱼补贴：海苔片 +{self.cfg.daily_bonus_snacks}")
+            user.rice += self.cfg.daily_bonus_snacks
+            deltas["白饭"] = deltas.get("白饭", 0.0) + self.cfg.daily_bonus_snacks
+            lines.append(f"顺手领了今日喂鱼补贴：白饭 +{self.cfg.daily_bonus_snacks}")
         lv_before = growth.level_from_exp(fish.exp)
         if exp_gain:
             fish.exp += int(exp_gain)
@@ -435,6 +439,9 @@ class Pond:
         if st.pending_adventure:
             r.lines.append(f"🌊 {st.pending_adventure['name']}的奇遇进行中，点「小游戏 → 鱼塘奇遇」查看。")
         me = self.state.users.get(uid)
+        if me:
+            r.lines.append(f"你的道具：白饭 {me.rice} · Token {me.tokens} · 绝版海苔 {me.snacks}")
+            r.lines.append(f"游历机会：{me.travel_tickets}/{self.cfg.sign.ticket_cap}")
         pr = st.pending_rescue
         if pr and st.status == "alive":
             r.lines.append(f"🆘 求援进行中：{pr['text']}"
@@ -470,7 +477,14 @@ class Pond:
         remain = self._cooldown_left("feed", f.cooldown_min, user)
         if remain:
             return self._cd_busy("投喂", remain)
+        if user.rice < f.rice_cost:
+            r = ActionResult(ok=False, title="白饭不够了",
+                             lines=[f"投喂需要白饭 ×{f.rice_cost}，签到后去「游历」或「钓鱼」都能获得。"])
+            r.buttons = [Button("游历", "养鱼 游历"), Button("钓鱼", "养鱼 钓鱼"), *self._main_buttons()]
+            return r
+        user.rice -= f.rice_cost
         deltas: Dict[str, float] = {}
+        deltas["白饭"] = -float(f.rice_cost)
         lines: List[str] = []
         if fish.satiety >= f.overfeed_threshold:
             fish.weight = max(0.0, fish.weight - f.overfeed_weight_loss)
@@ -506,18 +520,18 @@ class Pond:
         remain = self._cooldown_left("snack", s.cooldown_min, user)
         if remain:
             return self._cd_busy("加餐", remain)
-        if user.snacks < s.cost:
+        if user.rice < s.cost:
             r = ActionResult(ok=False, title="库存不足",
-                             lines=["海苔片不够了……每日互动补贴和毕业奖励都能攒。"])
+                             lines=[f"白饭不够了……加餐需要白饭 {s.cost} 份，可通过签到、钓鱼和游历获得。"])
             r.buttons = self._main_buttons()
             return r
-        user.snacks -= s.cost
+        user.rice -= s.cost
         mult = self._repeat_mult("snack")
         fish = self.state.fish
         bs, bm = fish.satiety, fish.mood
         fish.satiety = actions.clamp(fish.satiety + s.satiety_gain * mult)
         fish.mood = actions.clamp(fish.mood + s.mood_gain * mult)
-        deltas = {"饱腹": fish.satiety - bs, "心情": fish.mood - bm, "海苔片": -float(s.cost)}
+        deltas = {"饱腹": fish.satiety - bs, "心情": fish.mood - bm, "白饭": -float(s.cost)}
         lines = [actions.choice(self.rng, actions.SNACK_OK)]
         return self._commit(user, "snack", deltas, lines, s.exp, title="加餐")
 
@@ -585,6 +599,7 @@ class Pond:
             "opened_by": uid,
             "opened_by_name": user.display_name,
             "opened_at": self.clock(),
+            "boosted": False,
         }
         user.cooldowns["play"] = self.clock()
         r = ActionResult(event="game_open", title="套圈小游戏",
@@ -594,6 +609,24 @@ class Pond:
                      Button("泡泡③", "养鱼 玩耍 3"), Button("养鱼", "养鱼")]
         r.data = {"game": "shells", "opened_by": user.display_name}
         return r
+
+    def _do_play_token(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
+        user, gate = self._care_gate(uid, name)
+        if gate is not None:
+            return gate
+        if self.state.pending_play:
+            return ActionResult(ok=False, title="先完成当前玩耍",
+                                lines=["一局还没结束，完成后再开 Token 陪玩。"],
+                                buttons=self._main_buttons())
+        if user.tokens < 1:
+            return ActionResult(ok=False, title="Token 不够了",
+                                lines=["Token 可以从钓鱼和游历中获得。"],
+                                buttons=[Button("钓鱼", "养鱼 钓鱼"), Button("游历", "养鱼 游历")])
+        result = self._do_play(uid, name, None)
+        if result.event == "game_open":
+            self.state.pending_play["boosted"] = True
+            result.lines.insert(0, "使用 Token 陪玩：猜中后额外增加体重和心情。")
+        return result
 
     def _play_pick(self, user: UserInfo, arg: str) -> ActionResult:
         p = self.cfg.play
@@ -616,10 +649,18 @@ class Pond:
             r = ActionResult(ok=False, title="没听懂", lines=["要猜泡泡编号：1 / 2 / 3。"])
             r.buttons = self._main_buttons()
             return r
+        if pending.get("boosted"):
+            if user.tokens < 1:
+                return ActionResult(ok=False, title="Token 不够了",
+                                    lines=["这局尚未结算，Token 不足，无法使用加成。"],
+                                    buttons=self._main_buttons())
+            user.tokens -= 1
         self.state.pending_play = None
         fish = self.state.fish
         deltas: Dict[str, float] = {}
         lines: List[str] = []
+        if pending.get("boosted"):
+            deltas["Token"] = -1.0
         if n - 1 == pending["hidden"]:
             if fish.clean < self.cfg.dirty_clean_threshold:
                 fish.mood = actions.clamp(fish.mood + p.fail_mood)
@@ -627,12 +668,17 @@ class Pond:
                 lines.append(actions.choice(self.rng, actions.PLAY_DIRTY))
                 lines.append("（水太脏，鱼粮都馊了——「净水」之后再来）")
             else:
-                fish.weight = min(self.cfg.max_weight, fish.weight + p.success_weight)
+                before_weight = fish.weight
+                weight_gain = p.success_weight + (p.token_weight_bonus if pending.get("boosted") else 0)
+                fish.weight = min(self.cfg.max_weight, fish.weight + weight_gain)
                 bm = fish.mood
-                fish.mood = actions.clamp(fish.mood + p.success_mood)
-                deltas["体重"] = p.success_weight
+                mood_gain = p.success_mood + (p.token_mood_bonus if pending.get("boosted") else 0)
+                fish.mood = actions.clamp(fish.mood + mood_gain)
+                deltas["体重"] = fish.weight - before_weight
                 deltas["心情"] = fish.mood - bm
                 lines.append(actions.choice(self.rng, actions.PLAY_WIN))
+                if pending.get("boosted"):
+                    lines.append("Token 的加成生效，玩得特别尽兴！")
         else:
             fish.mood = actions.clamp(fish.mood + p.fail_mood)
             deltas["心情"] = p.fail_mood
@@ -697,7 +743,7 @@ class Pond:
 
     # -------------------------------------------------- 玩法扩展：签到/钓鱼/救援/许愿
     def _do_sign(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
-        """每日打卡：每自然日一次，连续天数递进奖励海苔片（用户级，跨鱼）。"""
+        """每日打卡：每自然日一次，连续天数递进奖励白饭和 Token（用户级，跨鱼）。"""
         self._touch()
         user = self._user(uid, name)
         now = self.clock()
@@ -718,13 +764,22 @@ class Pond:
             reward += sc.streak3
         user.last_sign_day = day
         user.sign_streak = streak
-        user.snacks += reward
+        user.rice += reward
+        ticket_gain = int(user.travel_tickets < self.cfg.sign.ticket_cap)
+        user.travel_tickets += ticket_gain
+        token_reward = 1 if streak >= 7 else 0
+        user.tokens += token_reward
         r = ActionResult(event="sign", title="每日打卡",
                          lines=[f"打卡成功，连续 {streak} 天！",
-                                f"海苔片 +{reward}"] +
-                               ([f"🔥 连续 {streak} 天，追加海苔片 +{reward - sc.base}"]
+                                 f"白饭 +{reward}"] +
+                                ([f"🔥 连续 {streak} 天，追加白饭 +{reward - sc.base}"]
                                 if reward > sc.base else []))
-        r.deltas = {"海苔片": float(reward)}
+        r.deltas = {"白饭": float(reward)}
+        r.deltas["游历机会"] = float(ticket_gain)
+        if token_reward:
+            r.deltas["Token"] = float(token_reward)
+            r.lines.append("连续签到奖励：Token +1")
+        r.lines.append(f"游历机会：{user.travel_tickets}/{self.cfg.sign.ticket_cap}")
         r.buttons = self._main_buttons()
         return r
 
@@ -737,33 +792,28 @@ class Pond:
         remain = self._cooldown_left("fishing", fcfg.cooldown_min, user)
         if remain:
             return self._cd_busy("钓鱼", remain)
-        fish = self.state.fish
         roll = self.rng.random()
         deltas: Dict[str, float] = {}
         lines: List[str] = []
-        cum = 0.0
-        if roll < (cum := cum + fcfg.p_food):
-            user.snacks += 1
-            deltas["海苔片"] = 1.0
-            lines.append(actions.choice(self.rng, actions.FISH_FOOD))
-        elif roll < (cum := cum + fcfg.p_shell):
-            bm = fish.mood
-            fish.mood = actions.clamp(fish.mood + fcfg.mood_shell)
-            deltas["心情"] = fish.mood - bm
-            lines.append(actions.choice(self.rng, actions.FISH_SHELL))
-        elif roll < (cum := cum + fcfg.p_bigfood):
-            fish.weight = min(self.cfg.max_weight, fish.weight + fcfg.weight_bigfood)
-            deltas["体重"] = fcfg.weight_bigfood
-            lines.append(actions.choice(self.rng, actions.FISH_BIGFOOD))
-        elif roll < (cum := cum + fcfg.p_weed):
-            bm = fish.mood
-            fish.mood = actions.clamp(fish.mood + fcfg.mood_weed)
-            deltas["心情"] = fish.mood - bm
-            lines.append(actions.choice(self.rng, actions.FISH_WEED))
+        cum = fcfg.p_rice
+        if roll < cum:
+            user.rice += 1
+            deltas["白饭"] = 1.0
+            lines.append("鱼钩捞起一团白饭，正好能喂大肥鱼。")
+        elif roll < (cum := cum + fcfg.p_token):
+            user.tokens += 1
+            deltas["Token"] = 1.0
+            lines.append("浮漂钓起一枚 Token，收好了！")
+        elif roll < (cum := cum + fcfg.p_bundle):
+            user.rice += 2
+            deltas["白饭"] = 2.0
+            lines.append("钓到饭盒，里面装着白饭 ×2。")
         else:
-            user.snacks += fcfg.chest_snacks
-            deltas["海苔片"] = float(fcfg.chest_snacks)
-            lines.append(actions.choice(self.rng, actions.FISH_CHEST))
+            user.rice += 3
+            user.tokens += 1
+            deltas["白饭"] = 3.0
+            deltas["Token"] = 1.0
+            lines.append(f"宝箱打开了：白饭 ×{fcfg.chest_snacks}、Token ×1！")
         return self._commit(user, "fishing", deltas, lines, fcfg.exp, title="钓鱼", intimacy_gain=0)
 
     def _do_rescue(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
@@ -793,7 +843,7 @@ class Pond:
         got_names = list(pr["got"].values())
         if len(pr["got"]) >= pr["need"]:
             for ruid, rname in pr["got"].items():
-                self._user(ruid, rname).snacks += rc.reward_snacks
+                self._user(ruid, rname).rice += rc.reward_snacks
             bm = fish.mood
             fish.mood = actions.clamp(fish.mood + rc.reward_mood)
             lv_before = growth.level_from_exp(fish.exp)
@@ -801,7 +851,7 @@ class Pond:
             lv_after = growth.level_from_exp(fish.exp)
             self.state.pending_rescue = None
             lines = [f"救援成功！{'、'.join(got_names)} 把鱼儿解救了出来。",
-                     f"参与者：海苔片 +{rc.reward_snacks}",
+                     f"参与者：白饭 +{rc.reward_snacks}",
                      f"鱼儿：心情 +{rc.reward_mood:.0f} · 经验 +8"]
             if lv_after > lv_before:
                 lines.append(f"叮！进阶成「{growth.stage_name(lv_after)}」啦！")
@@ -817,20 +867,20 @@ class Pond:
         return r
 
     def _do_wish(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
-        """许愿池：花海苔片随机换增益（心情/活力/体重/返还）。"""
+        """许愿池：花白饭随机换增益（心情/活力/体重/返还）。"""
         user, gate = self._care_gate(uid, name)
         if gate is not None:
             return gate
         w = self.cfg.wish
         fish = self.state.fish
-        if user.snacks < w.cost:
-            r = ActionResult(ok=False, title="海苔片不够",
-                             lines=[f"许愿需要 {w.cost} 片海苔片，你现在有 {user.snacks} 片。",
+        if user.rice < w.cost:
+            r = ActionResult(ok=False, title="白饭不够",
+                             lines=[f"许愿需要白饭 {w.cost} 份，你现在有 {user.rice} 份。",
                                     "签到、钓鱼、毕业奖励都能攒～"])
             r.buttons = self._main_buttons()
             return r
-        user.snacks -= w.cost
-        deltas: Dict[str, float] = {"海苔片": -float(w.cost)}
+        user.rice -= w.cost
+        deltas: Dict[str, float] = {"白饭": -float(w.cost)}
         lines: List[str] = []
         roll = self.rng.randrange(4)
         if roll == 0:
@@ -848,8 +898,8 @@ class Pond:
             deltas["体重"] = w.weight_gain
             lines.append(actions.choice(self.rng, actions.WISH_WEIGHT))
         else:
-            user.snacks += w.refund
-            deltas["海苔片"] = deltas.get("海苔片", 0.0) + w.refund
+            user.rice += w.refund
+            deltas["白饭"] = deltas.get("白饭", 0.0) + w.refund
             lines.append(actions.choice(self.rng, actions.WISH_THANKS))
         return self._commit(user, "wish", deltas, lines, w.exp, title="许愿池", intimacy_gain=0)
 
@@ -1038,6 +1088,8 @@ class Pond:
         lines = [
             f"猜鱼心思｜猜1～10，{g.attempts}次机会，冷却{g.cooldown_min}分钟。",
             f"合力寻宝｜三人接力探路、搬石、开箱，{t.expire_min}分钟内完成。",
+            "大肥鱼游历｜签到获得机会，完成3～5段路线带回白饭和Token。",
+            "Token陪玩｜消耗1枚Token，猜中后获得额外成长。",
             "鱼塘奇遇｜每天每人一次，选择路线，带回故事与纪念物。",
             "今日心愿｜正常照料就能共同完成，每天一个小目标。",
             "纪念物｜查看个人收藏，换鱼后继续保留。",
@@ -1052,6 +1104,7 @@ class Pond:
             lines.append(f"寻宝接力进行中：已完成 {len(self.state.pending_treasure['got'])}/3 步，快来搭把手！")
         return ActionResult(title="鱼塘小游戏", lines=lines, buttons=[
             Button("🐟 猜鱼心思", "养鱼 猜鱼"), Button("🗺 合力寻宝", "养鱼 寻宝"),
+            Button("🧭 大肥鱼游历", "养鱼 游历"), Button("Token陪玩", "养鱼 Token陪玩"),
             Button("🌊 鱼塘奇遇", "养鱼 奇遇"), Button("💭 今日心愿", "养鱼 心愿"),
             Button("🎁 纪念物", "养鱼 纪念物"),
             Button("共建鱼塘", "养鱼 建设"), Button("纪念册", "养鱼 纪念册"),
@@ -1118,6 +1171,97 @@ class Pond:
             f"不同鱼友各计一次，有效照料自动推进；完成后鱼心情 +{self.cfg.heartwish.mood_gain:g}（上限100）。",
             "按服务器自然日刷新，今日目标固定；换鱼不会重领奖励。"],
             buttons=[Button(command, f"养鱼 {command}"), Button("小游戏", "养鱼 小游戏"), Button("养鱼", "养鱼")])
+
+    def _travel_card(self, game: Dict, lines: Optional[List[str]] = None) -> ActionResult:
+        scene, left, right = travel.SCENES[game["step"] % len(travel.SCENES)]
+        step = game["step"] + 1
+        text = lines or [f"第 {step}/{game['steps']} 段：来到{scene}，选一条路继续。"]
+        text.append("旅程中的选择会带回白饭或 Token，也可能遇见朋友。")
+        buttons = [
+            Button(left, f"养鱼 游历 1@{game['token']}"),
+            Button(right, f"养鱼 游历 2@{game['token']}"),
+        ]
+        return ActionResult(event="game_open", title="大肥鱼游历", lines=text, buttons=buttons,
+                            data={"step": step, "steps": game["steps"]})
+
+    def _do_travel(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
+        user, gate = self._care_gate(uid, name)
+        if gate is not None:
+            return gate
+        game = self.state.pending_travel
+        if not game:
+            if arg:
+                return ActionResult(ok=False, title="游历已结束", lines=["发「游历」开始新的旅程。"],
+                                    buttons=self._main_buttons())
+            if user.travel_tickets < 1:
+                return ActionResult(ok=False, title="还没有游历机会",
+                                    lines=["签到可获得游历机会，完成旅程后才能带回道具。"],
+                                    buttons=[Button("签到", "养鱼 签到"), *self._main_buttons()])
+            user.travel_tickets -= 1
+            game = {"uid": uid, "name": user.display_name,
+                    "steps": self.rng.randint(3, 5), "step": 0,
+                    "earned_rice": 0, "earned_tokens": 0,
+                    "token": str(int(self.clock() * 1000)),
+                    "expires": self.clock() + 1800}
+            self.state.pending_travel = game
+            if not user.liangdi_seen and self.rng.random() < 0.0005:
+                user.liangdi_seen = True
+                user.rice += 99
+                user.tokens += 99
+                self.state.pending_travel = None
+                return ActionResult(title="隐藏游历：梁帝", lines=[
+                    "梁帝突然现身，挥手赏下满满一袋道具！",
+                    "白饭 +99 · Token +99（此隐藏事件每位鱼友仅能遇见一次）",
+                ], deltas={"白饭": 99, "Token": 99}, buttons=self._main_buttons())
+            return self._travel_card(game, [
+                f"{game['name']}带着大肥鱼出发了，这趟要经历 {game['steps']} 段旅程。"])
+
+        if game["uid"] != uid:
+            return ActionResult(ok=False, title="这是别人的旅程",
+                                lines=[f"由 {game['name']} 带队，等他完成这趟游历。"],
+                                buttons=self._main_buttons())
+        pick, _, token = (arg or "").partition("@")
+        if token and token != game["token"]:
+            return ActionResult(ok=False, title="这趟旅程已更新", lines=["发「游历」查看当前进度。"],
+                                buttons=self._main_buttons())
+        if not pick:
+            return self._travel_card(game)
+        if pick not in ("1", "2"):
+            result = self._travel_card(game, ["请选择按钮上的路线继续。"])
+            result.ok = False
+            return result
+
+        rice_gain = 1 if pick == "1" else 0
+        token_gain = 1 if pick == "2" else 0
+        user.rice += rice_gain
+        user.tokens += token_gain
+        game["earned_rice"] += rice_gain
+        game["earned_tokens"] += token_gain
+        lines = ["大肥鱼顺利走完这一段：" + ("白饭 +1" if pick == "1" else "Token +1")]
+        if self.rng.random() < 0.20:
+            friend = actions.choice(self.rng, list(travel.FRIENDS))
+            flavor, rice, tokens = travel.FRIENDS[friend]
+            user.rice += rice
+            user.tokens += tokens
+            game["earned_rice"] += rice
+            game["earned_tokens"] += tokens
+            lines.append(f"遇见老朋友 {friend}！{flavor}")
+            keepsake = f"{friend}的旅行纪念"
+            user.keepsakes[keepsake] = user.keepsakes.get(keepsake, 0) + 1
+            lines.append(f"收藏纪念物「{keepsake}」+1")
+            if rice:
+                lines.append(f"白饭 +{rice}")
+            if tokens:
+                lines.append(f"Token +{tokens}")
+
+        game["step"] += 1
+        if game["step"] >= game["steps"]:
+            self.state.pending_travel = None
+            lines.append(f"本趟收获：白饭 +{game['earned_rice']} · Token +{game['earned_tokens']}。")
+            return ActionResult(title="平安返塘", lines=lines, buttons=self._main_buttons(),
+                                deltas={"白饭": 1 if pick == "1" else 0,
+                                        "Token": 1 if pick == "2" else 0})
+        return self._travel_card(game, lines)
 
     def _adventure_card(self, game: Dict, lines: Optional[List[str]] = None) -> ActionResult:
         cfg = self.cfg.adventure
@@ -1244,7 +1388,7 @@ class Pond:
                 f"机会：{cfg.attempts}次 · 时限：{cfg.expire_min}分钟",
                 "操作：点数字按钮，或发送「猜鱼 数字」。",
                 "提示：猜错会告诉你大了还是小了。",
-                f"猜中：海苔片 +{cfg.reward_snacks}、心情 +{cfg.mood_win:g}",
+                f"猜中：白饭 +{cfg.reward_snacks}、心情 +{cfg.mood_win:g}",
                 f"机会用完：心情 +{cfg.mood_miss:g}"],
                 deltas={"活力": -cfg.energy_cost}, buttons=self._guess_buttons(game))
         if not game:
@@ -1269,8 +1413,8 @@ class Pond:
         fish.mood = actions.clamp(fish.mood + (cfg.mood_win if won else cfg.mood_miss))
         deltas = {"心情": fish.mood - before}
         if won:
-            user.snacks += cfg.reward_snacks
-            deltas["海苔片"] = cfg.reward_snacks
+            user.rice += cfg.reward_snacks
+            deltas["白饭"] = cfg.reward_snacks
         lines = [f"猜中了！它惊讶得吐了个爱心泡泡。答案就是 {game['hidden']}。" if won else
                  f"机会用完啦！它悄悄告诉你：答案是 {game['hidden']}。蹭蹭手指，下次再猜～"]
         return self._commit(user, "guess", deltas, lines, cfg.exp, title="猜鱼结算")
@@ -1298,7 +1442,7 @@ class Pond:
         if not step:
             return ActionResult(title="合力寻宝", lines=[
                 f"池底发现神秘宝箱！{cfg.expire_min} 分钟内由三位不同鱼友依次探路 → 搬石 → 开箱。",
-                f"成功后每人海苔片 +{cfg.reward_snacks}，鱼心情 +{cfg.reward_mood:g}；超时无奖励、不扣道具。",
+                f"成功后每人白饭 +{cfg.reward_snacks}，鱼心情 +{cfg.reward_mood:g}；超时无奖励、不扣道具。",
                 f"进度 {len(game['got'])}/3，下一步发「寻宝 {expected}」。"], buttons=buttons)
         if uid in game["got"] or step != expected:
             return ActionResult(ok=False, title="接力等你", lines=[
@@ -1312,16 +1456,16 @@ class Pond:
         self.state.pending_treasure = None
         for participant in game["got"]:
             keeper = self.state.users[participant]
-            keeper.snacks += cfg.reward_snacks
+            keeper.rice += cfg.reward_snacks
             if participant != uid:
                 keeper.intimacy += 1
                 keeper.total_interactions += 1
                 self.state.community_exp += 1
         before = fish.mood
         fish.mood = actions.clamp(fish.mood + cfg.reward_mood)
-        return self._commit(user, "treasure_finish", {"心情": fish.mood - before, "海苔片": cfg.reward_snacks},
-                            ["宝箱打开，海苔片哗啦啦飘了出来！",
-                             f"感谢 {'、'.join(game['got'].values())}：每人海苔片 +{cfg.reward_snacks}、亲密 +1。"],
+        return self._commit(user, "treasure_finish", {"心情": fish.mood - before, "白饭": cfg.reward_snacks},
+                            ["宝箱打开，白饭哗啦啦飘了出来！",
+                             f"感谢 {'、'.join(game['got'].values())}：每人白饭 +{cfg.reward_snacks}、亲密 +1。"],
                             cfg.exp, title="寻宝成功")
 
     # -------------------------------------------------- 群玩法
@@ -1482,14 +1626,15 @@ class Pond:
         self.state.pending_treasure = None
         self.state.pending_rescue = None
         self.state.pending_adventure = None
+        self.state.pending_travel = None
         self.state.round_stats.clear()
         self.state.round_events.clear()
         for u in self.state.users.values():
-            u.intimacy = 0     # 亲密跟着鱼走；海苔片和累计次数保留
+            u.intimacy = 0     # 亲密跟着鱼走；钱包和累计次数保留
             u.cooldowns.clear()
         r = ActionResult(event="restart", title="新的一生",
                          lines=[actions.choice(self.rng, actions.NEW_FISH),
-                                f"这一尾叫「{fish.name}」。档案、海苔片、材料和装饰都还在，接着加油！"])
+                                f"这一尾叫「{fish.name}」。档案、白饭、Token、海苔、材料和装饰都还在，接着加油！"])
         r.buttons = self._main_buttons()
         return r
 
@@ -1515,12 +1660,12 @@ class Pond:
             base = growth.reward_for_grade(grade_val, self.cfg)
             if ranked and base > 0:
                 first = ranked[0]
-                first.snacks += base
+                first.rice += base
                 rewards.append((first.display_name or "匿名鱼友", base))
                 half = base // 2
                 for u in ranked[1:3]:
                     if half > 0:
-                        u.snacks += half
+                        u.rice += half
                         rewards.append((u.display_name or "匿名鱼友", half))
         self.state.end_summary = {
             "reason": reason, "fish_name": fish.name, "grade": grade_val, "score": score_val,
@@ -1534,6 +1679,7 @@ class Pond:
         self.state.end_at = now
         self.state.status = "ended"
         self.state.pending_adventure = None
+        self.state.pending_travel = None
         self.state.pending_play = None
         self.state.pending_guess.clear()
         self.state.pending_treasure = None
@@ -1554,7 +1700,7 @@ class Pond:
                 f"相伴 {s.get('days', 0)} 天 · 最上心的鱼友：{s.get('top_keeper') or '暂无'}",
             ]
             for name, amount in s.get("rewards") or []:
-                lines.append(f"感谢 {name} 的悉心照料：海苔片 +{amount}")
+                lines.append(f"感谢 {name} 的悉心照料：白饭 +{amount}")
             lines.append("它游进了更宽阔的池塘，档案已收录进图鉴。")
             event, title = "graduated", "出栏大典"
         else:

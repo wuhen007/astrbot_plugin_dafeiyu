@@ -59,14 +59,15 @@ def test_pet_clean_snack():
     r = pond.handle("u1", "小明", "净水")
     assert r.deltas["洁净"] == pytest.approx(35.0)
     clock.advance_hours(0.3)
-    r = pond.handle("u1", "小明", "加餐")           # 海苔片 -1，今日补贴已领
-    assert r.deltas["海苔片"] == pytest.approx(-1.0)
-    assert pond.state.users["u1"].snacks == 3       # 3(初始) +1(补贴) -1(加餐)
+    r = pond.handle("u1", "小明", "加餐")           # 白饭 -1，今日补贴已领
+    assert r.deltas["白饭"] == pytest.approx(-1.0)
+    assert pond.state.users["u1"].rice == 5        # 5(初始) +1(补贴) -1(加餐)
+    assert pond.state.users["u1"].snacks == 0       # 绝版海苔不参与新玩法
 
 
 def test_snack_refuse_when_empty():
     pond, _ = make_pond()
-    pond.state.users["u9"] = UserInfo(display_name="阿九", snacks=0)
+    pond.state.users["u9"] = UserInfo(display_name="阿九", rice=0)
     r = pond.handle("u9", "阿九", "加餐")
     assert not r.ok
 
@@ -236,11 +237,11 @@ def test_decay_offline():
     clock.advance_hours(2)
     r = pond.handle("u1", "小明", "养鱼")
     fish = pond.state.fish
-    assert fish.satiety == pytest.approx(70 - 2.5 * 2)
-    assert fish.mood == pytest.approx(70 - 1.5 * 2)
-    assert fish.clean == pytest.approx(80 - 1.0 * 2)
+    assert fish.satiety == pytest.approx(70 - pond.cfg.decay_satiety * 2)
+    assert fish.mood == pytest.approx(70 - pond.cfg.decay_mood * 2)
+    assert fish.clean == pytest.approx(80 - pond.cfg.decay_clean * 2)
     assert fish.energy == pytest.approx(min(100.0, 80 + 6.0 * 2))
-    assert r.data["offline"]["饱腹"] == pytest.approx(-5.0)
+    assert r.data["offline"]["饱腹"] == pytest.approx(-pond.cfg.decay_satiety * 2)
 
 
 def test_decay_stage_multiplier():
@@ -248,7 +249,8 @@ def test_decay_stage_multiplier():
     pond.state.fish.exp = 500                       # Lv.6 → ×1.85
     clock.advance_hours(2)
     pond.handle("u1", "小明", "养鱼")
-    assert pond.state.fish.satiety == pytest.approx(70 - 2.5 * 2 * 1.85)
+    assert pond.state.fish.satiety == pytest.approx(
+        70 - pond.cfg.decay_satiety * 2 * pond.cfg.stage_decay_multiplier[-1])
 
 
 def test_pond_level_relief():
@@ -287,7 +289,7 @@ def test_graduate_gate():
 def test_graduate_and_rewards():
     pond, _ = make_pond()
     _ready_fish(pond)
-    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55, nick_set=True)
+    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55, nick_set=True, snacks=5, rice=2)
     pond.state.users["u2"] = UserInfo(display_name="小红", intimacy=30, nick_set=True)
     pond.state.users["u3"] = UserInfo(display_name="阿三", intimacy=20, nick_set=True)
     r = pond.handle("u1", "小明", "出栏")
@@ -298,9 +300,10 @@ def test_graduate_and_rewards():
     assert s["score"] == pytest.approx(77.5)
     assert s["grade"] == "A"
     assert pond.state.archive[-1]["grade"] == "A"
-    assert pond.state.users["u1"].snacks == 12      # 第 1 名全额
-    assert pond.state.users["u2"].snacks == 6       # 第 2/3 名半额
-    assert pond.state.users["u3"].snacks == 6
+    assert pond.state.users["u1"].rice == 14        # 第 1 名全额
+    assert pond.state.users["u2"].rice == 6         # 第 2/3 名半额
+    assert pond.state.users["u3"].rice == 6
+    assert pond.state.users["u1"].snacks == 5       # 绝版海苔保持不变
     assert any(b.label == "再养一条" for b in r.buttons)
 
 
@@ -316,7 +319,7 @@ def test_blocked_after_end():
 def test_restart_keeps_archive_and_snacks():
     pond, _ = make_pond()
     _ready_fish(pond)
-    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55, nick_set=True)
+    pond.state.users["u1"] = UserInfo(display_name="小明", intimacy=55, nick_set=True, snacks=5, rice=2)
     pond.handle("u1", "小明", "出栏")
     r = pond.handle("u1", "小明", "再养一条")
     assert r.ok
@@ -325,7 +328,8 @@ def test_restart_keeps_archive_and_snacks():
     assert st.fish.weight == pond.cfg.start_weight
     assert st.fish.exp == 0
     assert st.users["u1"].intimacy == 0             # 亲密跟着鱼走
-    assert st.users["u1"].snacks == 12              # 钱包保留
+    assert st.users["u1"].rice == 14               # 新奖励进入白饭钱包
+    assert st.users["u1"].snacks == 5              # 旧海苔库存保留
     assert len(st.archive) == 1                     # 图鉴保留
 
 

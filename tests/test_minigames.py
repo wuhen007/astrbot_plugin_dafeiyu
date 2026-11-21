@@ -23,15 +23,16 @@ def test_guess_independent_resume_and_single_reward(pond):
     assert pond.state.pending_guess["a"] == game
     assert pond.handle("b", "乙", "猜鱼").ok
     assert pond.state.pending_guess["a"] is not pond.state.pending_guess["b"]
-    wallet = pond.state.users["a"].snacks
+    wallet = pond.state.users["a"].rice
     answer = str(game["hidden"])
     result = pond.handle("a", "甲", "猜鱼", answer)
-    assert result.ok and result.deltas["海苔片"] == 1
-    assert pond.state.users["a"].snacks == wallet + 1
+    assert result.ok and result.deltas["白饭"] == 1
+    assert pond.state.users["a"].rice == wallet + 1
     assert "b" in pond.state.pending_guess and "a" not in pond.state.pending_guess
     assert not pond.handle("a", "甲", "猜鱼", answer).ok
     assert not pond.handle("a", "甲", "猜鱼").ok
-    assert pond.state.users["a"].snacks == wallet + 1
+    assert pond.state.users["a"].rice == wallet + 1
+    assert pond.state.users["a"].snacks == pond.cfg.start_snacks
 
 
 def test_guess_hints_invalid_input_and_loss(pond):
@@ -83,7 +84,8 @@ def test_treasure_order_distinct_users_and_rewards(pond):
     assert pond.state.pending_treasure is None
     assert pond.state.community_exp == 3
     for uid in "abc":
-        assert pond.state.users[uid].snacks == pond.cfg.start_snacks + 2
+        assert pond.state.users[uid].rice == pond.cfg.start_rice + 2
+        assert pond.state.users[uid].snacks == pond.cfg.start_snacks
         assert pond.state.users[uid].intimacy == 1
         assert pond.state.users[uid].total_interactions == 1
     assert not pond.handle("c", "丙", "寻宝", "开箱").ok

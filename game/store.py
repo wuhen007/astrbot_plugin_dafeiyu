@@ -6,18 +6,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import os
 import re
 import time
 from pathlib import Path
 from typing import Optional
 
+from astrbot.api import logger
+
 from .config import GameConfig
 from .engine import Pond
 from .state import PondState
-
-_log = logging.getLogger(__name__)
 
 
 class JsonStore:
@@ -39,7 +38,7 @@ class JsonStore:
             if not isinstance(raw, dict):
                 raise ValueError("存档根节点必须是对象")
             expected = {"fish": dict, "users": dict, "archive": list,
-                        "pending_guess": dict, "story_flags": list,
+                        "pending_guess": dict, "pending_travel": dict, "story_flags": list,
                         "decorations": dict, "round_stats": dict,
                         "round_events": list, "weekly_reports": list}
             for key, kind in expected.items():
@@ -51,9 +50,9 @@ class JsonStore:
             try:
                 p.replace(backup)
             except OSError as backup_error:
-                _log.error("[肥鱼养成记] 存档损坏且无法备份 %s：%s", p, backup_error)
+                logger.error("[肥鱼养成记] 存档损坏且无法备份 %s：%s", p, backup_error)
                 raise RuntimeError(f"鱼塘存档损坏且无法备份：{p.name}") from backup_error
-            _log.warning("[肥鱼养成记] 存档损坏，已备份为 %s：%s", backup.name, e)
+            logger.warning("[肥鱼养成记] 存档损坏，已备份为 %s：%s", backup.name, e)
             return None
 
     def save(self, state: PondState) -> None:

@@ -89,5 +89,5 @@ def test_settlement_plain():
     r = pond.handle("u1", "小明", "出栏")
     t = render_plain(r)
     assert "出栏大典" in t and "══════" in t
-    assert "评级 A" in t and "海苔片 +12" in t
+    assert "评级 A" in t and "白饭 +12" in t
     assert render_markdown(r).startswith("【🎉")

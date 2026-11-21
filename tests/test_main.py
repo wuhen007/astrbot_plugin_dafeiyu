@@ -419,7 +419,7 @@ def test_metadata_is_single_version_source_and_contains_market_fields(plugin):
     main, p, tmp = plugin
     text = (main.PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
     assert f'version: "{main._PLUGIN_VERSION}"' in text
-    assert main._PLUGIN_VERSION == "2.0.2"
+    assert main._PLUGIN_VERSION == "2.1.0"
     assert "display_name:" in text and "support_platforms:" in text
 
 

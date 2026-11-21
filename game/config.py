@@ -20,6 +20,7 @@ FISH_NAMES: Tuple[str, ...] = ("泡泡", "团团", "阿肥", "布丁", "汤圆",
 @dataclass
 class FeedAction:
     """投喂。"""
+    rice_cost: int = 1
     satiety_gain: float = 22.0        # 饱腹恢复（受收益递减影响）
     energy_gain: float = 6.0          # 活力恢复
     weight_min: float = 1.5           # 增重下限
@@ -68,6 +69,8 @@ class PlayAction:
     success_mood: float = 8.0
     fail_mood: float = 3.0            # 猜错/捞空的安慰奖
     pending_timeout_min: int = 5      # 开局后超时作废
+    token_weight_bonus: float = 3.0
+    token_mood_bonus: float = 8.0
 
 
 @dataclass
@@ -80,9 +83,10 @@ class WeighAction:
 @dataclass
 class SignConfig:
     """每日打卡。"""
-    base: int = 1          # 基础海苔片
-    streak3: int = 2       # 连续 ≥3 天追加
-    streak7: int = 3       # 连续 ≥7 天追加（取更高档）
+    base: int = 1
+    streak3: int = 2
+    streak7: int = 3
+    ticket_cap: int = 3
 
 
 @dataclass
@@ -90,14 +94,9 @@ class FishingAction:
     """一键钓鱼：概率表按顺序累计，剩余概率为宝箱。"""
     cooldown_min: int = 30
     exp: int = 4
-    p_food: float = 0.40        # 海苔片 +1
-    p_shell: float = 0.25       # 心情 +8（好看的贝壳）
-    p_bigfood: float = 0.15     # 体重 +2（大颗鱼粮）
-    p_weed: float = 0.12        # 空 —— 心情 +2（水草安慰奖）
-    mood_shell: float = 8.0
-    mood_weed: float = 2.0
-    weight_bigfood: float = 2.0
-    chest_snacks: int = 3       # 宝箱：海苔片 +3
+    p_rice: float = 0.45
+    p_token: float = 0.20
+    p_bundle: float = 0.25
 
 
 @dataclass
@@ -167,9 +166,9 @@ class HeartwishConfig:
 @dataclass
 class GameConfig:
     # --- 自然变化（每小时） ---
-    decay_satiety: float = 2.5
-    decay_mood: float = 1.5
-    decay_clean: float = 1.0
+    decay_satiety: float = 2.2
+    decay_mood: float = 1.3
+    decay_clean: float = 0.9
     regen_energy: float = 6.0
 
     # --- 难度曲线 ---
@@ -211,8 +210,9 @@ class GameConfig:
     start_energy: float = 80.0
     start_weight: float = 8.0
     max_weight: float = 100.0
-    start_snacks: int = 3            # 新鱼友自带海苔片
-    daily_bonus_snacks: int = 1      # 每日首次互动补贴
+    start_snacks: int = 0            # 旧配置保留；海苔为绝版库存
+    start_rice: int = 5
+    daily_bonus_snacks: int = 1      # 旧配置名；补贴发白饭
 
     feed: FeedAction = field(default_factory=FeedAction)
     snack: SnackAction = field(default_factory=SnackAction)

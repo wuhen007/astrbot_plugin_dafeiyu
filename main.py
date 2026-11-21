@@ -495,7 +495,7 @@ class DaFeiYuPlugin(Star):
             if sub in ("昵称", "改名"):
                 m2 = _NICK_ARG_RE.search(text)
                 arg = m2.group(1).strip() if m2 else None
-            elif sub in ("猜鱼", "寻宝", "奇遇", "建设", "装修", "纪念册", "合影", "运动会", "性格", "委托", "周报"):
+            elif sub in ("猜鱼", "寻宝", "奇遇", "游历", "建设", "装修", "纪念册", "合影", "运动会", "性格", "委托", "周报"):
                 arg = text[act.end():].strip() or None
         async for res in self._dispatch(event, sub, arg):
             yield res
