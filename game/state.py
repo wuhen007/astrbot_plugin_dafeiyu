@@ -180,6 +180,7 @@ class PondState:
     sports_week: Optional[Dict] = None
     weekly_quest: Optional[Dict] = None
     weekly_reports: List[Dict] = field(default_factory=list)
+    daily_diary: Optional[Dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -207,6 +208,7 @@ class PondState:
             "sports_week": self.sports_week,
             "weekly_quest": self.weekly_quest,
             "weekly_reports": list(self.weekly_reports),
+            "daily_diary": self.daily_diary,
         }
 
     @classmethod
@@ -237,4 +239,5 @@ class PondState:
             sports_week=d.get("sports_week"),
             weekly_quest=d.get("weekly_quest"),
             weekly_reports=list(d.get("weekly_reports") or []),
+            daily_diary=d.get("daily_diary"),
         )

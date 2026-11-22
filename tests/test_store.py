@@ -5,9 +5,34 @@ import random
 import pytest
 
 from game import GameConfig, Pond
+from game.state import PondState
 from game.store import JsonStore, load_or_create
 
 T0 = 1_700_000_000.0
+
+
+def test_daily_diary_is_optional_for_legacy_saves_and_roundtrips(tmp_path):
+    legacy = PondState.from_dict({"session_key": "legacy:pond", "fish": {}})
+    assert legacy.daily_diary is None
+    assert legacy.to_dict()["daily_diary"] is None
+
+    store = JsonStore(tmp_path)
+    legacy_path = store._path("legacy:pond")
+    legacy_path.write_text(json.dumps({"session_key": "legacy:pond", "fish": {}}), "utf-8")
+    assert store.load("legacy:pond").daily_diary is None
+
+    pond = Pond.create("diary:pond", config=GameConfig(), clock=lambda: T0)
+    expected = {
+        "day": "2026-11-22",
+        "counts": {"投喂": 2},
+        "highlights": ["遇见老朋友 Claude！偷偷带来零食。"],
+        "stats": {"name": "团团", "mood": 82},
+    }
+    pond.state.daily_diary = expected
+    store.save(pond.state)
+
+    loaded = store.load("diary:pond")
+    assert loaded.daily_diary == expected
 
 
 def test_roundtrip(tmp_path):

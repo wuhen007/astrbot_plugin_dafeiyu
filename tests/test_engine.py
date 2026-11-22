@@ -8,6 +8,7 @@ import random
 import pytest
 
 from game import GameConfig, Pond, PondState, growth
+from game.engine import ActionResult
 from game.state import UserInfo
 
 H = 3600.0
@@ -61,6 +62,108 @@ def test_sign_result_hides_completed_action_but_keeps_navigation():
     assert "签到" not in labels
     assert any(label.endswith("看看鱼塘") for label in labels)
     assert any(label.endswith("小游戏") for label in labels)
+
+
+def test_daily_diary_unlocks_after_successful_interaction_and_uses_real_data():
+    pond, _ = make_pond()
+    before = pond.handle("u1", "小明", "养鱼")
+    assert not any(button.command == "养鱼 日记" for button in before.buttons)
+
+    feed = pond.handle("u1", "小明", "投喂")
+    assert any(button.command == "养鱼 日记" for button in feed.buttons)
+    assert pond.state.daily_diary["counts"] == {"投喂": 1}
+
+    diary = pond.handle("u1", "小明", "日记")
+    text = "\n".join(diary.lines)
+    assert diary.title == "大肥鱼的今日手记"
+    assert "投喂 1 次" in text
+    assert f"饱腹 {round(pond.state.fish.satiety)}" in text
+    assert 160 <= len(text) <= 260
+    assert any(button.command == "养鱼" for button in diary.buttons)
+
+
+def test_failed_interaction_does_not_add_to_daily_diary():
+    pond, _ = make_pond()
+    pond.handle("u1", "小明", "投喂")
+    result = pond.handle("u1", "小明", "投喂")
+    assert not result.ok
+    assert pond.state.daily_diary["counts"] == {"投喂": 1}
+
+
+def test_daily_diary_unlocks_after_a_multistep_game_finishes():
+    pond, _ = make_pond()
+    menu = pond.handle("u1", "小明", "玩耍")
+    assert not any(button.command == "养鱼 日记" for button in menu.buttons)
+
+    result = pond.handle("u1", "小明", "玩耍", "①")
+    assert any(button.command == "养鱼 日记" for button in result.buttons)
+
+
+def test_daily_diary_stays_hidden_on_a_sports_strategy_prompt():
+    pond, _ = make_pond()
+    menu = pond.handle("u1", "小明", "运动会", "冲刺")
+    assert menu.title.endswith("选择训练策略")
+    assert not any(button.command == "养鱼 日记" for button in menu.buttons)
+    assert pond.state.daily_diary is None
+
+
+def test_daily_diary_stays_hidden_on_read_only_game_menus():
+    for command in ("运动会", "建设"):
+        pond, _ = make_pond()
+        result = pond.handle("u1", "小明", command)
+        assert not any(button.command == "养鱼 日记" for button in result.buttons)
+        assert pond.state.daily_diary is None
+
+
+def test_daily_diary_rolls_over_at_local_midnight():
+    pond, clock = make_pond()
+    pond.handle("u1", "小明", "逗鱼")
+    old_day = pond.state.daily_diary["day"]
+    clock.advance(24 * H)
+
+    result = pond.handle("u1", "小明", "日记")
+
+    assert "今天还没有互动" in "\n".join(result.lines)
+    assert pond.state.daily_diary["day"] != old_day
+    assert pond.state.daily_diary["counts"] == {}
+    assert not any(button.command == "养鱼 日记" for button in result.buttons)
+
+
+def test_daily_diary_keeps_only_a_bounded_set_of_notable_events():
+    pond, _ = make_pond()
+    result = ActionResult(
+        lines=[f"遇见老朋友：{index}-{'鱼' * 120}" for index in range(8)]
+    )
+
+    pond._record_daily_diary("travel", result)
+
+    highlights = pond.state.daily_diary["highlights"]
+    assert len(highlights) == 5
+    assert all(len(highlight) <= 100 for highlight in highlights)
+    diary = pond.handle("u1", "小明", "日记")
+    text = "\n".join(diary.lines)
+    assert "遇见老朋友：0" in text
+    assert "梁帝" not in text
+    assert 160 <= len(text) <= 260
+
+
+def test_daily_diary_stays_compact_with_many_interaction_types():
+    pond, _ = make_pond()
+    summary = pond._ensure_daily_diary()
+    summary["counts"] = {
+        label: 1
+        for label in (
+            "投喂", "加餐", "逗鱼", "净水", "玩耍", "Token陪玩", "称重", "签到", "钓鱼",
+            "救援", "许愿", "运动会", "游历", "奇遇", "猜鱼", "寻宝", "建设",
+        )
+    }
+    summary["stats"] = {
+        "name": "团团", "satiety": 70, "mood": 70, "clean": 80, "energy": 80, "weight": 8.0
+    }
+
+    diary = pond.handle("u1", "小明", "日记")
+
+    assert 160 <= len("\n".join(diary.lines)) <= 260
 
 
 def test_travel_buttons_do_not_expose_internal_token():
@@ -356,6 +459,12 @@ def test_restart_keeps_archive_and_snacks():
         display_name="小明", intimacy=55, nick_set=True, snacks=5, rice=2
     )
     pond.handle("u1", "小明", "出栏")
+    pond.state.daily_diary = {
+        "day": "2026-11-22",
+        "counts": {"投喂": 1},
+        "highlights": [],
+        "stats": {},
+    }
     r = pond.handle("u1", "小明", "再养一条")
     assert r.ok
     st = pond.state
@@ -366,6 +475,7 @@ def test_restart_keeps_archive_and_snacks():
     assert st.users["u1"].rice == 14  # 新奖励进入白饭钱包
     assert st.users["u1"].snacks == 5  # 旧海苔库存保留
     assert len(st.archive) == 1  # 图鉴保留
+    assert st.daily_diary is None
 
 
 def test_archive_keeps_only_the_latest_twenty_entries():

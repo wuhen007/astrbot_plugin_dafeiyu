@@ -40,7 +40,8 @@ class JsonStore:
             expected = {"fish": dict, "users": dict, "archive": list,
                         "pending_guess": dict, "pending_travel": dict, "story_flags": list,
                         "decorations": dict, "round_stats": dict,
-                        "round_events": list, "weekly_reports": list}
+                        "round_events": list, "weekly_reports": list,
+                        "daily_diary": dict}
             for key, kind in expected.items():
                 if key in raw and raw[key] is not None and not isinstance(raw[key], kind):
                     raise ValueError(f"存档字段 {key} 类型错误")

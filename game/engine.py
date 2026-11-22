@@ -62,8 +62,30 @@ COMMANDS: Dict[str, str] = {
     "性格": "personality",
     "委托": "weekly",
     "周报": "weekly_reports",
+    "日记": "diary",
     "帮助": "help",
 }
+
+_DIARY_ACTION_LABELS = {
+    "feed": "投喂",
+    "snack": "加餐",
+    "pet": "逗鱼",
+    "clean": "净水",
+    "play": "玩耍",
+    "play_token": "Token陪玩",
+    "weigh": "称重",
+    "sign": "签到",
+    "fishing": "钓鱼",
+    "rescue": "救援",
+    "wish": "许愿",
+    "sports": "运动会",
+    "travel": "游历",
+    "adventure": "奇遇",
+    "guess": "猜鱼",
+    "treasure": "寻宝",
+    "build": "建设",
+}
+_DIARY_EVENT_MARKERS = ("遇见老朋友", "梁帝", "找到宝藏", "发现宝藏", "猜中了", "套圈成功")
 
 HELP_LINES = (
     "【肥鱼养成记】全群共养一条鱼，把它喂成「大肥鱼」再风光出栏！",
@@ -191,9 +213,96 @@ class Pond:
             result = self._do_help()
         else:
             result = getattr(self, f"_do_{handler_key}")(user_id, display_name, arg)
+        if result.ok and self._diary_action_completed(handler_key, arg, result):
+            self._record_daily_diary(handler_key, result)
+            if not any(button.command == "养鱼 日记" for button in result.buttons):
+                result.buttons.append(Button("📔 大肥鱼日记", "养鱼 日记"))
         if self.store is not None:
             self.store.save(self.state)
         return result
+
+    @staticmethod
+    def _diary_action_completed(handler_key: Optional[str], arg: Optional[str], result) -> bool:
+        if handler_key not in _DIARY_ACTION_LABELS:
+            return False
+        if handler_key in {
+            "play", "travel", "adventure", "guess", "treasure", "sports", "build"
+        } and not (arg or "").strip():
+            return False
+        return not (handler_key == "sports" and result.title.endswith("选择训练策略"))
+
+    def _ensure_daily_diary(self) -> Dict:
+        today = time.strftime("%Y-%m-%d", time.localtime(self.clock()))
+        summary = self.state.daily_diary
+        if (
+            not isinstance(summary, dict)
+            or summary.get("day") != today
+            or not isinstance(summary.get("counts"), dict)
+            or not isinstance(summary.get("highlights"), list)
+            or not isinstance(summary.get("stats"), dict)
+        ):
+            summary = {"day": today, "counts": {}, "highlights": [], "stats": {}}
+            self.state.daily_diary = summary
+        return summary
+
+    def _record_daily_diary(self, handler_key: str, result: ActionResult) -> None:
+        summary = self._ensure_daily_diary()
+        label = _DIARY_ACTION_LABELS[handler_key]
+        summary["counts"][label] = summary["counts"].get(label, 0) + 1
+        fish = self.state.fish
+        summary["stats"] = {
+            "name": fish.name,
+            "satiety": round(fish.satiety),
+            "mood": round(fish.mood),
+            "clean": round(fish.clean),
+            "energy": round(fish.energy),
+            "weight": round(fish.weight, 1),
+        }
+        highlights = summary["highlights"]
+        for line in result.lines:
+            if any(marker in line for marker in _DIARY_EVENT_MARKERS):
+                highlight = str(line)[:100]
+                if highlight not in highlights and len(highlights) < 5:
+                    highlights.append(highlight)
+
+    def _do_diary(self, uid: str, name: str, arg: Optional[str]) -> ActionResult:
+        summary = self._ensure_daily_diary()
+        counts = summary["counts"]
+        if not counts:
+            return ActionResult(
+                ok=False,
+                title="大肥鱼的今日手记",
+                lines=["今天还没有互动，等鱼友来陪我玩一会儿吧。"],
+                buttons=[Button("🐟 看看鱼塘", "养鱼")],
+            )
+
+        stats = summary["stats"]
+        total = sum(counts.values())
+        action_items = list(counts.items())
+        actions_text = "、".join(
+            f"{label} {count} 次" for label, count in action_items[:3]
+        )
+        if len(action_items) > 3:
+            other_count = sum(count for _, count in action_items[3:])
+            actions_text += f"、其他玩法 {other_count} 次"
+        if summary["highlights"]:
+            memory = "最让我记住的是：" + "；".join(
+                highlight[:20] for highlight in summary["highlights"][:2]
+            )
+        else:
+            memory = "今天没有特别事件，大家的陪伴也很珍贵。"
+        mood = stats["mood"]
+        feeling = "现在心情很不错" if mood >= 75 else "现在心情还算平静" if mood >= 40 else "现在有点低落"
+        lines = [
+            f"今天的鱼塘很热闹，我是「{stats['name']}」。大家一共和我互动了 {total} 次：{actions_text}。每次熟悉的脚步停在池边，我都会摇摇尾巴，欢迎大家来陪我。",
+            f"{memory} 我把这些真实发生的小事收进今天的记忆里。鱼塘的日子不一定每天都轰轰烈烈，能和大家一起慢慢长大，对我来说就已经很珍贵。",
+            f"最后一次互动时，我的状态是：饱腹 {stats['satiety']}，心情 {mood}，水质 {stats['clean']}，活力 {stats['energy']}，体重 {stats['weight']}。{feeling}。谢谢大家今天来看我，明天也欢迎来鱼塘打个招呼。",
+        ]
+        return ActionResult(
+            title="大肥鱼的今日手记",
+            lines=lines,
+            buttons=[Button("🐟 看看鱼塘", "养鱼")],
+        )
 
     def chat_reward(self, user_id: str, display_name: str) -> Optional[str]:
         """对已触发聊天互动的鱼友抽奖；返回奖励名，未中奖返回 None。"""
@@ -2205,6 +2314,7 @@ class Pond:
         self.state.pending_travel = None
         self.state.round_stats.clear()
         self.state.round_events.clear()
+        self.state.daily_diary = None
         for u in self.state.users.values():
             u.intimacy = 0  # 亲密跟着鱼走；钱包和累计次数保留
             u.cooldowns.clear()
