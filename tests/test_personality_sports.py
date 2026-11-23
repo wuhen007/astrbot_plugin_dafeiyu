@@ -15,6 +15,7 @@ def pond():
     cfg.rescue.chance = 0
     now = [datetime(2026, 11, 18, 12).timestamp()]
     p = Pond.create("sports:test", cfg, lambda: now[0], random.Random(42))
+    p.handle("a", "甲", "小游戏")
     p.now = now
     return p
 
@@ -110,6 +111,7 @@ def test_sports_cheers_week_boundary_restart_old_button(pond):
     pond.now[0] = datetime(2026, 11, 23, 0, 0).timestamp()
     # preserve fish life while checking calendar rollover
     pond.state.fish.last_tick = pond.now[0]
+    pond.handle("a", "a", "小游戏")
     assert not pond.handle("a", "a", "运动会", old).ok
     assert not pond.state.sports_week["entries"]
     enter(pond)

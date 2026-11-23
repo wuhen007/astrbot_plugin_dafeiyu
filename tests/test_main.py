@@ -202,6 +202,11 @@ def _saved_state(tmp_path):
     return json.loads(files[0].read_text("utf-8"))
 
 
+def _open_minigames(plugin, event=None):
+    event = event or FakeEvent()
+    plugin._get_pond(event).handle(event.get_sender_id(), event.get_sender_name(), "小游戏")
+
+
 # ---------------------------------------------------------------- 测试
 def test_group_chat_reward_requires_mention_or_name(plugin, monkeypatch):
     main, p, tmp = plugin
@@ -358,10 +363,24 @@ def test_button_click_routes_and_skips_image(plugin):
 def test_button_cmd_only_data(plugin):
     """只有 {"cmd": ...} 的数据也能路由（兜底）。"""
     main, p, tmp = plugin
+    _open_minigames(p)
     inter = types.SimpleNamespace(action_id="dfy:x", data={"cmd": "/养鱼 玩耍"})
     ev = FakeEvent(interaction=inter)
     results = _run(_gather(p.on_button(ev)))
     assert any("套圈" in t for t in _texts(results[-1]))
+
+
+def test_minigame_text_commands_require_opening_the_game_hub(plugin):
+    main, p, tmp = plugin
+    blocked = _run(_gather(p.cmd_yangyu(FakeEvent(message_str="/猜鱼"))))
+    assert any("先打开小游戏" in text for text in _texts(blocked[-1]))
+    assert not _saved_state(tmp)["pending_guess"]
+
+    _run(_gather(p.cmd_yangyu(FakeEvent(message_str="/小游戏"))))
+    assert _saved_state(tmp)["minigames_unlocked"] is True
+    started = _run(_gather(p.cmd_yangyu(FakeEvent(message_str="/猜鱼"))))
+    assert any("它偷偷想了一个" in text for text in _texts(started[-1]))
+    assert _saved_state(tmp)["pending_guess"]
 
 
 def test_button_foreign_ignored(plugin):
@@ -526,7 +545,7 @@ def test_metadata_is_single_version_source_and_contains_market_fields(plugin):
     main, p, tmp = plugin
     text = (main.PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
     assert f'version: "{main._PLUGIN_VERSION}"' in text
-    assert main._PLUGIN_VERSION == "2.3.0"
+    assert main._PLUGIN_VERSION == "2.3.1"
     assert "display_name:" in text and "support_platforms:" in text
     assert "  - aiocqhttp" in text
 
@@ -581,6 +600,7 @@ def test_panel_nick_gate(plugin):
 @pytest.mark.parametrize("prefix", ["", "/", "#", "/养鱼 "])
 def test_guess_text_command_and_argument(plugin, prefix):
     main, p, tmp = plugin
+    _open_minigames(p)
     _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "猜鱼"))))
     state = _saved_state(tmp)
     answer = state["pending_guess"]["u1"]["hidden"]
@@ -591,6 +611,7 @@ def test_guess_text_command_and_argument(plugin, prefix):
 
 def test_treasure_button_argument_and_menu(plugin):
     main, p, tmp = plugin
+    _open_minigames(p)
     _run(_gather(p.cmd_yangyu(FakeEvent(message_str="/寻宝"))))
     inter = types.SimpleNamespace(
         action_id="dfy:寻宝|探路|接力",
@@ -660,6 +681,7 @@ def test_new_nickname_clears_pending_prompt(plugin):
 @pytest.mark.parametrize("prefix", ["", "/", "#", "/养鱼 "])
 def test_adventure_text_choice_and_new_commands(plugin, prefix):
     main, p, tmp = plugin
+    _open_minigames(p)
     _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "奇遇"))))
     game = _saved_state(tmp)["pending_adventure"]
     results = _run(
@@ -675,6 +697,7 @@ def test_adventure_text_choice_and_new_commands(plugin, prefix):
 
 def test_adventure_button_roundtrip(plugin):
     main, p, tmp = plugin
+    _open_minigames(p)
     results = _run(_gather(p.cmd_yangyu(FakeEvent(message_str="/奇遇"))))
     button = _rows(results[-1], main)[0].buttons[0]
     data = button.action.data
@@ -712,6 +735,7 @@ def test_build_text_and_button_arguments(plugin, prefix):
 @pytest.mark.parametrize("prefix", ["", "/", "#", "/养鱼 "])
 def test_sports_strategy_button_roundtrip(plugin, prefix):
     main, p, tmp = plugin
+    _open_minigames(p)
     result = _run(_gather(p.cmd_yangyu(FakeEvent(message_str=prefix + "运动会 冲刺"))))
     button = _rows(result[-1], main)[0].buttons[2]
     assert "爆发" in button.action.data["arg"]

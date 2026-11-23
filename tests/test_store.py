@@ -35,6 +35,19 @@ def test_daily_diary_is_optional_for_legacy_saves_and_roundtrips(tmp_path):
     assert loaded.daily_diary == expected
 
 
+def test_minigames_unlock_defaults_locked_and_roundtrips(tmp_path):
+    legacy = PondState.from_dict({"session_key": "legacy:games", "fish": {}})
+    assert legacy.minigames_unlocked is False
+
+    pond = Pond.create("games:unlocked", config=GameConfig(), clock=lambda: T0)
+    pond.state.minigames_unlocked = True
+    store = JsonStore(tmp_path)
+    store.save(pond.state)
+
+    loaded = store.load("games:unlocked")
+    assert loaded.minigames_unlocked is True
+
+
 def test_roundtrip(tmp_path):
     store = JsonStore(tmp_path)
     pond = Pond.create("test:group:1", config=GameConfig(),

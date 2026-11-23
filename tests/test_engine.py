@@ -32,7 +32,9 @@ def make_pond(**cfgkw):
     cfg = GameConfig(**cfgkw)
     clock = FakeClock()
     rng = random.Random(42)
-    return Pond.create("test:group:1", config=cfg, clock=clock, rng=rng), clock
+    pond = Pond.create("test:group:1", config=cfg, clock=clock, rng=rng)
+    pond.handle("u1", "小明", "小游戏")
+    return pond, clock
 
 
 # ---------- 基础动作 ----------
@@ -459,6 +461,7 @@ def test_restart_keeps_archive_and_snacks():
         display_name="小明", intimacy=55, nick_set=True, snacks=5, rice=2
     )
     pond.handle("u1", "小明", "出栏")
+    pond.state.minigames_unlocked = True
     pond.state.daily_diary = {
         "day": "2026-11-22",
         "counts": {"投喂": 1},
@@ -476,6 +479,7 @@ def test_restart_keeps_archive_and_snacks():
     assert st.users["u1"].snacks == 5  # 旧海苔库存保留
     assert len(st.archive) == 1  # 图鉴保留
     assert st.daily_diary is None
+    assert st.minigames_unlocked is False
 
 
 def test_archive_keeps_only_the_latest_twenty_entries():

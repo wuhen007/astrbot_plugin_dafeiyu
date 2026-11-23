@@ -86,6 +86,7 @@ _DIARY_ACTION_LABELS = {
     "build": "建设",
 }
 _DIARY_EVENT_MARKERS = ("遇见老朋友", "梁帝", "找到宝藏", "发现宝藏", "猜中了", "套圈成功")
+_MINIGAME_HANDLERS = {"play", "play_token", "guess", "treasure", "travel", "adventure", "sports"}
 
 HELP_LINES = (
     "【肥鱼养成记】全群共养一条鱼，把它喂成「大肥鱼」再风光出栏！",
@@ -211,6 +212,13 @@ class Pond:
         handler_key = COMMANDS.get((command or "").strip())
         if handler_key is None:
             result = self._do_help()
+        elif handler_key in _MINIGAME_HANDLERS and not self.state.minigames_unlocked:
+            result = ActionResult(
+                ok=False,
+                title="先打开小游戏",
+                lines=["请先打开「🎮 小游戏」入口，再选择想玩的项目。"],
+                buttons=[Button("🎮 打开小游戏", "养鱼 小游戏"), Button("🐟 看看鱼塘", "养鱼")],
+            )
         else:
             result = getattr(self, f"_do_{handler_key}")(user_id, display_name, arg)
         if result.ok and self._diary_action_completed(handler_key, arg, result):
@@ -1092,10 +1100,17 @@ class Pond:
         user.travel_tickets += ticket_gain
         token_reward = 1 if streak >= 7 else 0
         user.tokens += token_reward
+        greeting = (
+            "大肥鱼听见熟悉的脚步声，马上游到池边摇尾巴迎接你。"
+            if streak == 1
+            else "它已经记住你来打卡的时间，远远看见你就开始吐泡泡。"
+            if streak < 7
+            else "连续这么多天都来陪它，大肥鱼把脑袋轻轻靠在池边，像是在说：你又来啦。"
+        )
         r = ActionResult(
             event="sign",
             title="每日打卡",
-            lines=[f"打卡成功，连续 {streak} 天！", f"白饭 +{reward}"]
+            lines=[greeting, f"打卡成功，连续 {streak} 天！", f"白饭 +{reward}"]
             + ([f"🔥 连续 {streak} 天，追加白饭 +{reward - sc.base}"] if reward > sc.base else []),
         )
         r.deltas = {"白饭": float(reward)}
@@ -1177,7 +1192,13 @@ class Pond:
             fish.exp += 8
             lv_after = growth.level_from_exp(fish.exp)
             self.state.pending_rescue = None
+            rescue_flavor = {
+                "水草": "缠住它的水草终于松开了，它绕着大家游了一圈，开心地甩甩尾巴。",
+                "泡泡": "困住它的大泡泡啪地散开，它赶紧贴到大家身边蹭了蹭。",
+                "石缝": "卡住的东西终于取出来了，它松了口气，围着大家转了个圈。",
+            }.get(pr.get("kind"), "大肥鱼终于脱困，立刻游到大家身边蹭了蹭。")
             lines = [
+                rescue_flavor,
                 f"救援成功！{'、'.join(got_names)} 把鱼儿解救了出来。",
                 f"参与者：白饭 +{rc.reward_snacks}",
                 f"鱼儿：心情 +{rc.reward_mood:.0f} · 经验 +8",
@@ -1196,6 +1217,7 @@ class Pond:
             event="rescue",
             title="求援中",
             lines=[
+                "大肥鱼看见你赶来帮忙，紧张地摆动鱼鳍，努力朝安全的地方游。",
                 f"🛟 {pr['text']}——已就位 {len(pr['got'])}/{pr['need']}（{'、'.join(got_names)}）",
                 f"还差 {pr['need'] - len(pr['got'])} 位：点下方按钮参与！",
             ],
@@ -1310,7 +1332,10 @@ class Pond:
                     ok=False, title="今天已助威", lines=["每人每天一次，明天再来为大家加油吧。"]
                 )
             game["cheers"][uid] = day
-            notice.append(f"{user.display_name}为鱼友们加油！今日助威已记录（仅作应援展示）。")
+            notice.append(
+                f"{user.display_name}为鱼友们加油！看台上的泡泡跟着欢呼声一起升了起来。"
+            )
+            notice.append("今日助威已记录（仅作应援展示）。")
         elif pick:
             if pick not in choices:
                 return ActionResult(
@@ -1324,9 +1349,15 @@ class Pond:
                 )
             stat, matched, stat_name = choices[pick]
             if len(raw) < 3:
+                scene = {
+                    "冲刺": "大肥鱼在起跑线前蹦跶了两下，尾巴已经蓄势待发。",
+                    "绕水草": "水草赛道弯弯绕绕，大肥鱼先探出脑袋观察路线。",
+                    "顶泡泡": "彩色泡泡飘到眼前，大肥鱼仰起头，认真瞄准目标。",
+                }[pick]
                 return ActionResult(
                     title=f"{pick} · 选择训练策略",
                     lines=[
+                        scene,
                         f"参考鱼当前{stat_name}，推荐{matched}策略。",
                         "得分 = 对应状态×0.7 + 策略匹配20分 + 随机0～10分。",
                         "本次免费，不扣属性；选定策略即参赛，本周不能重赛。",
@@ -1355,7 +1386,14 @@ class Pond:
             }
             user.sports_badges += 1
             self._round_event(f"{user.display_name}参加鱼塘运动会：{pick}，得分{score}")
-            notice.append(f"参赛完成，纪念奖章 +1；本次成绩 {score:.1f} 分！")
+            finish_flavor = {
+                "冲刺": "哨声一响，大肥鱼像枚小炮弹似的冲过终点，水花溅了满场。",
+                "绕水草": "它贴着水草灵巧地绕行，最后还得意地转身摆了摆尾巴。",
+                "顶泡泡": "它稳稳顶起泡泡，泡泡晃了几下，竟然一路没有掉下来。",
+            }[pick]
+            notice.extend(
+                [finish_flavor, f"参赛完成，纪念奖章 +1；本次成绩 {score:.1f} 分！"]
+            )
         entries = game["entries"]
         total = sum(entry["score"] for entry in entries.values())
         lines = notice + [
@@ -1521,6 +1559,7 @@ class Pond:
         gate = self._ended_gate()
         if gate is not None:
             return gate
+        self.state.minigames_unlocked = True
         g, t = self.cfg.guess, self.cfg.treasure
         lines = [
             f"猜鱼心思｜猜1～10，{g.attempts}次机会，冷却{g.cooldown_min}分钟。",
@@ -1641,7 +1680,7 @@ class Pond:
         scene, left, right = travel.SCENES[game["step"] % len(travel.SCENES)]
         step = game["step"] + 1
         text = lines or [f"第 {step}/{game['steps']} 段：来到{scene}，选一条路继续。"]
-        text.append("旅程中的选择会带回白饭或 Token，也可能遇见朋友。")
+        text.append("大肥鱼已经探出脑袋张望啦，选一条路继续走，说不定会有新发现。")
         buttons = [
             Button(left, "养鱼 游历 1"),
             Button(right, "养鱼 游历 2"),
@@ -1732,7 +1771,12 @@ class Pond:
         user.tokens += token_gain
         game["earned_rice"] += rice_gain
         game["earned_tokens"] += token_gain
-        lines = ["大肥鱼顺利走完这一段：" + ("白饭 +1" if pick == "1" else "Token +1")]
+        scene, left, right = travel.SCENES[game["step"] % len(travel.SCENES)]
+        route = left if pick == "1" else right
+        lines = [
+            f"{scene}·{route}：{travel.ROUTE_STORIES[route]}",
+            "这段路顺利走完，大肥鱼把沿途收获小心地装进了行囊。",
+        ]
         if self.rng.random() < 0.20:
             friend = actions.choice(self.rng, list(travel.FRIENDS))
             flavor, rice, tokens = travel.FRIENDS[friend]
@@ -1740,7 +1784,8 @@ class Pond:
             user.tokens += tokens
             game["earned_rice"] += rice
             game["earned_tokens"] += tokens
-            lines.append(f"遇见老朋友 {friend}！{flavor}")
+            lines.append(f"遇见老朋友 {friend}！{travel.FRIEND_DIALOGUE[friend]}")
+            lines.append(flavor)
             keepsake = f"{friend}的旅行纪念"
             user.keepsakes[keepsake] = user.keepsakes.get(keepsake, 0) + 1
             lines.append(f"收藏纪念物「{keepsake}」+1")
@@ -1752,6 +1797,7 @@ class Pond:
         game["step"] += 1
         if game["step"] >= game["steps"]:
             self.state.pending_travel = None
+            lines.append("鱼塘的轮廓出现在前方，大肥鱼一路摇着尾巴回家啦。")
             lines.append(
                 f"本趟收获：白饭 +{game['earned_rice']} · Token +{game['earned_tokens']}。"
             )
@@ -2007,7 +2053,8 @@ class Pond:
             return ActionResult(
                 title="猜鱼心思",
                 lines=[
-                    f"{'小了' if n < game['hidden'] else '大了'}！还剩 {game['left']} 次，范围 {game['low']}～{game['high']}。"
+                    f"{'小了' if n < game['hidden'] else '大了'}！大肥鱼故意憋着笑，吐了个泡泡给你提示。",
+                    f"还剩 {game['left']} 次，范围 {game['low']}～{game['high']}。"
                 ],
                 buttons=self._guess_buttons(game),
             )
@@ -2155,8 +2202,15 @@ class Pond:
                 )
             user.materials -= 1
             donors[uid] = donors.get(uid, 0) + 1
+            lines.append("材料刚放进池塘，大肥鱼就游来闻了闻，像是在检查新家。")
             lines.append(f"{user.display_name}为{target}捐出1份材料，谢谢搭把手！")
             if sum(donors.values()) == DECORATIONS[target]:
+                built_flavor = {
+                    "水草角": "新长出的水草轻轻摇晃，大肥鱼立刻钻进去玩了一圈。",
+                    "贝壳小屋": "贝壳小屋在水底闪闪发亮，大肥鱼探头探脑地看了好久。",
+                    "月亮灯": "月亮灯亮起柔和的光，大肥鱼在光影里慢慢游了一圈。",
+                }[target]
+                lines.append(built_flavor)
                 lines.append(f"{target}建成！已加入鱼塘场景，换鱼后继续保留。")
                 if self.state.status == "alive":
                     self._round_event(f"鱼友们一起建成了{target}")
@@ -2315,6 +2369,7 @@ class Pond:
         self.state.round_stats.clear()
         self.state.round_events.clear()
         self.state.daily_diary = None
+        self.state.minigames_unlocked = False
         for u in self.state.users.values():
             u.intimacy = 0  # 亲密跟着鱼走；钱包和累计次数保留
             u.cooldowns.clear()

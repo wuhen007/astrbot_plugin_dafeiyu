@@ -181,6 +181,7 @@ class PondState:
     weekly_quest: Optional[Dict] = None
     weekly_reports: List[Dict] = field(default_factory=list)
     daily_diary: Optional[Dict] = None
+    minigames_unlocked: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -209,6 +210,7 @@ class PondState:
             "weekly_quest": self.weekly_quest,
             "weekly_reports": list(self.weekly_reports),
             "daily_diary": self.daily_diary,
+            "minigames_unlocked": self.minigames_unlocked,
         }
 
     @classmethod
@@ -240,4 +242,5 @@ class PondState:
             weekly_quest=d.get("weekly_quest"),
             weekly_reports=list(d.get("weekly_reports") or []),
             daily_diary=d.get("daily_diary"),
+            minigames_unlocked=bool(d.get("minigames_unlocked", False)),
         )

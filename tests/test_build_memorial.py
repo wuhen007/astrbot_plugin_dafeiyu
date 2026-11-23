@@ -13,7 +13,9 @@ from game.engine import memorial_lines
 def pond():
     cfg = GameConfig(daily_bonus_snacks=0, decay_mood=0, decay_satiety=0, decay_clean=0)
     cfg.rescue.chance = 0
-    return Pond.create("build:test", cfg, lambda: 1795000000.0, random.Random(42))
+    pond = Pond.create("build:test", cfg, lambda: 1795000000.0, random.Random(42))
+    pond.handle("a", "甲", "小游戏")
+    return pond
 
 
 def graduate(pond):

@@ -1,5 +1,6 @@
 """互动玩法：独立进度、协作约束、奖励幂等和存档兼容。"""
 import random
+from copy import deepcopy
 
 import pytest
 
@@ -10,8 +11,57 @@ from game import GameConfig, JsonStore, Pond, PondState
 def pond():
     cfg = GameConfig(daily_bonus_snacks=0)
     cfg.rescue.chance = 0
-    return Pond.create("games:test", config=cfg, clock=lambda: 1_700_000_000,
+    pond = Pond.create("games:test", config=cfg, clock=lambda: 1_700_000_000,
                        rng=random.Random(42))
+    pond.handle("a", "甲", "小游戏")
+    return pond
+
+
+def test_minigame_commands_wait_for_games_menu(pond):
+    locked = Pond.create(
+        "games:entry", config=GameConfig(), clock=lambda: 1_700_000_000,
+        rng=random.Random(42),
+    )
+    before = deepcopy(locked.state.to_dict())
+
+    result = locked.handle("a", "甲", "猜鱼")
+
+    assert not result.ok
+    assert result.title == "先打开小游戏"
+    assert "请先打开" in result.lines[0]
+    assert locked.state.to_dict() == before
+
+    menu = locked.handle("a", "甲", "小游戏")
+    assert menu.title == "鱼塘小游戏"
+    assert locked.state.minigames_unlocked is True
+    assert locked.handle("a", "甲", "猜鱼").ok
+
+
+@pytest.mark.parametrize(
+    "command,arg",
+    [
+        ("玩耍", None),
+        ("Token陪玩", None),
+        ("猜鱼", None),
+        ("寻宝", None),
+        ("游历", None),
+        ("奇遇", None),
+        ("运动会", None),
+    ],
+)
+def test_locked_minigame_commands_do_not_change_pond(command, arg):
+    cfg = GameConfig(daily_bonus_snacks=0)
+    cfg.rescue.chance = 0
+    locked = Pond.create(
+        "games:locked", config=cfg, clock=lambda: 1_700_000_000, rng=random.Random(42)
+    )
+    before = deepcopy(locked.state.to_dict())
+
+    result = locked.handle("a", "甲", command, arg)
+
+    assert not result.ok
+    assert result.title == "先打开小游戏"
+    assert locked.state.to_dict() == before
 
 
 def test_guess_independent_resume_and_single_reward(pond):

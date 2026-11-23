@@ -15,6 +15,7 @@ def pond():
     cfg.rescue.chance = 0
     now = [time.mktime((2026, 11, 17, 12, 0, 0, 0, 0, -1))]
     p = Pond.create("story:test", cfg, lambda: now[0], random.Random(42))
+    p.handle("a", "a", "小游戏")
     p.test_now = now
     return p
 

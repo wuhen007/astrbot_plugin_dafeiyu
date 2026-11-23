@@ -18,7 +18,9 @@ class FakeClock:
 
 
 def make_pond():
-    return Pond.create("t:1", config=GameConfig(), clock=FakeClock(), rng=random.Random(42))
+    pond = Pond.create("t:1", config=GameConfig(), clock=FakeClock(), rng=random.Random(42))
+    pond.handle("u1", "小明", "小游戏")
+    return pond
 
 
 def test_bar():
