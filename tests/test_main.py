@@ -395,6 +395,8 @@ def test_button_rows_layout(plugin):
     results = _run(_gather(p._dispatch(FakeEvent(), "养鱼")))
     rows = _rows(results[-1], main)
     assert rows
+    assert len(rows) <= 5
+    assert all(len(row.buttons) <= 3 for row in rows)
     first = rows[0].buttons
     assert [b.label for b in first] == ["🍚 投喂", "🍙 加餐", "🫧 逗鱼"]
     b0 = first[0]
@@ -403,6 +405,25 @@ def test_button_rows_layout(plugin):
     assert b0.action.data["act"] == "投喂"
     assert "🍚 投喂：/养鱼 投喂" in rows[0].fallback_text
     assert rows[0].action_timeout == 86400
+
+
+def test_games_and_more_menus_fit_three_columns(plugin):
+    main, p, tmp = plugin
+    for command in ("小游戏", "更多"):
+        results = _run(_gather(p._dispatch(FakeEvent(), command)))
+        rows = _rows(results[-1], main)
+        assert len(rows) <= 5
+        assert all(len(row.buttons) <= 3 for row in rows)
+
+    results = _run(_gather(p._dispatch(FakeEvent(), "更多")))
+    commands = [
+        button.action.data["cmd"]
+        for row in _rows(results[-1], main)
+        for button in row.buttons
+    ]
+    assert "/养鱼 称重" in commands
+    assert "/养鱼 排行" in commands
+    assert "/养鱼 档案" in commands
 
 
 def test_command_button_shim_builds_locally_on_db_lock(plugin, monkeypatch):
@@ -545,7 +566,7 @@ def test_metadata_is_single_version_source_and_contains_market_fields(plugin):
     main, p, tmp = plugin
     text = (main.PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
     assert f'version: "{main._PLUGIN_VERSION}"' in text
-    assert main._PLUGIN_VERSION == "2.3.1"
+    assert main._PLUGIN_VERSION == "2.3.2"
     assert "display_name:" in text and "support_platforms:" in text
     assert "  - aiocqhttp" in text
 

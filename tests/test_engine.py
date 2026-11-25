@@ -8,6 +8,7 @@ import random
 import pytest
 
 from game import GameConfig, Pond, PondState, growth
+from game.actions import RESCUE_KINDS
 from game.engine import ActionResult
 from game.state import UserInfo
 
@@ -30,6 +31,8 @@ class FakeClock:
 
 def make_pond(**cfgkw):
     cfg = GameConfig(**cfgkw)
+    if "rescue" not in cfgkw:
+        cfg.rescue.chance = 0.0
     clock = FakeClock()
     rng = random.Random(42)
     pond = Pond.create("test:group:1", config=cfg, clock=clock, rng=rng)
@@ -38,13 +41,39 @@ def make_pond(**cfgkw):
 
 
 # ---------- 基础动作 ----------
+def test_daily_menu_hides_cooldowns_and_suggests_other_interactions():
+    pond, clock = make_pond(start_satiety=30)
+    assert pond.handle("u1", "小明", "投喂").ok
+    user = pond.state.users["u1"]
+    for key in ("snack", "pet", "clean", "fishing"):
+        user.cooldowns[key] = clock()
+
+    daily = pond.handle("u1", "小明", "更多", "日常")
+    commands = {button.command for button in daily.buttons}
+    text = " ".join(daily.lines)
+
+    for command in (
+        "养鱼 投喂",
+        "养鱼 加餐",
+        "养鱼 逗鱼",
+        "养鱼 净水",
+        "养鱼 钓鱼",
+    ):
+        assert command not in commands
+    for label in ("投喂", "加餐", "逗鱼", "净水", "钓鱼"):
+        assert label in text
+    assert "换个方式继续陪它" in text
+    assert "养鱼 签到" in commands
+    assert "养鱼 许愿" in commands
+
+
 def test_feed_basic():
     pond, clock = make_pond()
     r = pond.handle("u1", "小明", "投喂")
     assert r.ok
     labels = [button.label for button in r.buttons]
     assert "投喂" not in labels
-    assert any(label.endswith("看看鱼塘") for label in labels)
+    assert any(label.endswith("更多") for label in labels)
     assert any(label.endswith("小游戏") for label in labels)
     assert r.deltas["饱腹"] == pytest.approx(22.0)
     assert 1.5 <= r.deltas["体重"] <= 3.5
@@ -62,8 +91,138 @@ def test_sign_result_hides_completed_action_but_keeps_navigation():
     result = pond.handle("u1", "小明", "签到")
     labels = [button.label for button in result.buttons]
     assert "签到" not in labels
-    assert any(label.endswith("看看鱼塘") for label in labels)
+    assert any(label.endswith("更多") for label in labels)
     assert any(label.endswith("小游戏") for label in labels)
+
+
+def test_more_menu_folds_secondary_navigation_and_game_results_fold_daily_actions():
+    pond, _ = make_pond()
+    panel = pond.handle("u1", "小明", "养鱼")
+    panel_commands = {button.command for button in panel.buttons}
+    assert not panel_commands.intersection(
+        {"养鱼 称重", "养鱼 排行", "养鱼 档案", "养鱼"}
+    )
+
+    more = pond.handle("u1", "小明", "更多")
+    commands = [button.command for button in more.buttons]
+    assert "养鱼 称重" in commands
+    assert "养鱼 排行" in commands
+    assert "养鱼 档案" in commands
+    assert "养鱼" in commands
+
+    game_commands = [button.command for button in pond._game_result_buttons()]
+    assert "养鱼 更多 日常" in game_commands
+    assert "养鱼 投喂" not in game_commands
+
+
+def test_diary_waits_for_rescue_and_stays_hidden_from_all_entry_points():
+    pond, clock = make_pond()
+    pond.handle("u1", "小明", "投喂")
+    pond.state.pending_rescue = {
+        "kind": "泡泡",
+        "text": "大肥鱼被泡泡困住了",
+        "need": 2,
+        "got": {},
+        "expires": clock() + 600,
+    }
+
+    first = pond.handle("u1", "小明", "救援")
+    assert first.title == "求援中"
+    assert not any(button.command == "养鱼 日记" for button in first.buttons)
+
+    more = pond.handle("u1", "小明", "更多")
+    assert not any(button.command == "养鱼 日记" for button in more.buttons)
+
+    diary = pond.handle("u1", "小明", "日记")
+    assert diary.title == "先解救大肥鱼"
+    assert not any(button.command == "养鱼 日记" for button in diary.buttons)
+
+    finished = pond.handle("u2", "小红", "救援")
+    assert finished.title == "救援成功"
+    assert any(button.command == "养鱼 日记" for button in finished.buttons)
+
+
+def test_adventure_result_keeps_only_the_rescue_action_when_rescue_starts():
+    pond, _ = make_pond()
+    pond.cfg.rescue.chance = 1.0
+    pond.cfg.rescue.need = 2
+    pond.handle("u1", "小明", "奇遇")
+    game = pond.state.pending_adventure
+
+    result = pond.handle(
+        "u1", "小明", "奇遇", f"帮忙@{game['token']}"
+    )
+
+    assert result.title == "奇遇归来"
+    assert pond.state.pending_rescue is not None
+    assert [button.command for button in result.buttons] == ["养鱼 救援"]
+
+
+def test_pending_rescue_button_remains_available_for_group_relay():
+    pond, clock = make_pond()
+    pond.state.pending_rescue = {
+        "kind": "泡泡",
+        "text": "大肥鱼被困住了",
+        "need": 2,
+        "got": {},
+        "expires": clock() + 600,
+    }
+
+    joined = pond.handle("u1", "小明", "救援")
+    assert [button.command for button in joined.buttons] == ["养鱼 救援"]
+
+    more = pond.handle("u2", "小红", "更多")
+    assert more.title == "先解救大肥鱼"
+    assert [button.command for button in more.buttons] == ["养鱼 救援"]
+
+
+def test_active_rescue_locks_all_other_gameplay_until_resolved():
+    pond, clock = make_pond()
+    pond.state.pending_rescue = {
+        "kind": "水草",
+        "text": "大肥鱼被水草缠住了",
+        "need": 2,
+        "got": {},
+        "expires": clock() + 600,
+    }
+
+    for command in ("投喂", "小游戏", "更多", "玩耍", "再养一条"):
+        result = pond.handle("u1", "小明", command)
+        assert not result.ok
+        assert result.title == "先解救大肥鱼"
+        assert [button.command for button in result.buttons] == ["养鱼 救援"]
+
+    panel = pond.handle("u2", "小红", "养鱼")
+    assert [button.command for button in panel.buttons] == ["养鱼 救援"]
+    assert pond.state.pending_play is None
+
+    pond.handle("u1", "小明", "救援")
+    finished = pond.handle("u2", "小红", "救援")
+    assert finished.title == "救援成功"
+    assert pond.state.pending_rescue is None
+    assert pond.handle("u1", "小明", "更多").title == "更多功能"
+
+
+def test_rescue_incidents_include_five_new_scenarios_and_limit_helpers_to_two_or_three():
+    new_kinds = {
+        "风筝线",
+        "旧渔网",
+        "贝壳",
+        "陶罐",
+        "滚石",
+    }
+    assert new_kinds <= {kind for kind, _ in RESCUE_KINDS}
+
+    pond, _ = make_pond()
+    pond.cfg.rescue.chance = 1.0
+    pond.cfg.rescue.need = 10
+    pond._maybe_spawn_rescue(pond.clock(), [])
+    assert pond.state.pending_rescue["need"] == 3
+
+    pond.state.pending_rescue = None
+    pond.cfg.rescue.need = 0
+    pond._maybe_spawn_rescue(pond.clock(), [])
+    assert pond.state.pending_rescue["need"] == 2
 
 
 def test_daily_diary_unlocks_after_successful_interaction_and_uses_real_data():
@@ -81,7 +240,7 @@ def test_daily_diary_unlocks_after_successful_interaction_and_uses_real_data():
     assert "投喂 1 次" in text
     assert f"饱腹 {round(pond.state.fish.satiety)}" in text
     assert 160 <= len(text) <= 260
-    assert any(button.command == "养鱼" for button in diary.buttons)
+    assert any(button.command == "养鱼 更多" for button in diary.buttons)
 
 
 def test_failed_interaction_does_not_add_to_daily_diary():
@@ -99,6 +258,74 @@ def test_daily_diary_unlocks_after_a_multistep_game_finishes():
 
     result = pond.handle("u1", "小明", "玩耍", "①")
     assert any(button.command == "养鱼 日记" for button in result.buttons)
+
+
+def test_travel_diary_unlocks_only_after_the_full_trip_returns():
+    pond, _ = make_pond()
+    pond.state.users["u1"] = UserInfo(
+        display_name="小明", nick_set=True, travel_tickets=1, liangdi_seen=True
+    )
+
+    opened = pond.handle("u1", "小明", "游历")
+    assert not any(button.command == "养鱼 日记" for button in opened.buttons)
+    pond.state.pending_travel["steps"] = 3
+
+    for step in range(3):
+        result = pond.handle("u1", "小明", "游历", "1")
+        if step < 2:
+            assert pond.state.pending_travel is not None
+            assert not any(button.command == "养鱼 日记" for button in result.buttons)
+        else:
+            assert pond.state.pending_travel is None
+            assert any(button.command == "养鱼 日记" for button in result.buttons)
+    assert pond.state.daily_diary["counts"] == {"游历": 1}
+
+
+def test_guess_diary_unlocks_only_after_guess_game_finishes():
+    pond, _ = make_pond()
+    opened = pond.handle("u1", "小明", "猜鱼")
+    assert not any(button.command == "养鱼 日记" for button in opened.buttons)
+    pond.state.pending_guess["u1"]["hidden"] = 10
+
+    hint = pond.handle("u1", "小明", "猜鱼", "1")
+    assert "u1" in pond.state.pending_guess
+    assert not any(button.command == "养鱼 日记" for button in hint.buttons)
+
+    finished = pond.handle("u1", "小明", "猜鱼", "10")
+    assert "u1" not in pond.state.pending_guess
+    assert any(button.command == "养鱼 日记" for button in finished.buttons)
+
+
+def test_treasure_diary_unlocks_only_after_relay_is_complete():
+    pond, _ = make_pond()
+    opened = pond.handle("u1", "小明", "寻宝")
+    assert not any(button.command == "养鱼 日记" for button in opened.buttons)
+
+    first = pond.handle("u1", "小明", "寻宝", "探路")
+    assert pond.state.pending_treasure is not None
+    assert not any(button.command == "养鱼 日记" for button in first.buttons)
+    second = pond.handle("u2", "小红", "寻宝", "搬石")
+    assert pond.state.pending_treasure is not None
+    assert not any(button.command == "养鱼 日记" for button in second.buttons)
+
+    finished = pond.handle("u3", "小三", "寻宝", "开箱")
+    assert pond.state.pending_treasure is None
+    assert any(button.command == "养鱼 日记" for button in finished.buttons)
+
+
+def test_adventure_diary_unlocks_after_explore_branch_ends():
+    pond, _ = make_pond()
+    opened = pond.handle("u1", "小明", "奇遇")
+    assert not any(button.command == "养鱼 日记" for button in opened.buttons)
+    token = pond.state.pending_adventure["token"]
+
+    explored = pond.handle("u1", "小明", "奇遇", f"探索@{token}")
+    assert pond.state.pending_adventure is not None
+    assert not any(button.command == "养鱼 日记" for button in explored.buttons)
+
+    returned = pond.handle("u1", "小明", "奇遇", f"返回@{token}")
+    assert pond.state.pending_adventure is None
+    assert any(button.command == "养鱼 日记" for button in returned.buttons)
 
 
 def test_daily_diary_stays_hidden_on_a_sports_strategy_prompt():
@@ -166,6 +393,29 @@ def test_daily_diary_stays_compact_with_many_interaction_types():
     diary = pond.handle("u1", "小明", "日记")
 
     assert 160 <= len("\n".join(diary.lines)) <= 260
+
+
+@pytest.mark.parametrize(
+    "outcome,pick,clean,marker",
+    [("win", "1", 100, "套中"), ("miss", "2", 100, "没套中"), ("dirty", "1", 0, "泥")],
+)
+def test_token_companion_has_scene_and_outcome_specific_copy(outcome, pick, clean, marker):
+    pond, _ = make_pond()
+    pond.state.users["u1"] = UserInfo(
+        display_name="小明", nick_set=True, rice=5, tokens=1
+    )
+    pond.state.fish.energy = 100
+
+    opened = pond.handle("u1", "小明", "Token陪玩")
+    scene = pond.state.pending_play["token_scene"]
+    assert any(scene in line for line in opened.lines)
+
+    pond.state.pending_play["hidden"] = 0
+    pond.state.fish.clean = clean
+    result = pond.handle("u1", "小明", "玩耍", pick)
+
+    assert any(marker in line for line in result.lines)
+    assert result.deltas["Token"] == -1
 
 
 def test_travel_buttons_do_not_expose_internal_token():

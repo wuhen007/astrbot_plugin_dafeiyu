@@ -47,7 +47,8 @@ def test_panel_plain():
     t = render_plain(r)
     assert "🐟" in t and "鱼籽" in t
     assert "饱腹" in t and "体重" in t and "鱼塘" in t
-    assert "[🍚 投喂]" in t and "[🏆 排行]" in t
+    assert "[🍚 投喂]" in t and "[📚 更多]" in t
+    assert "[🏆 排行]" not in t
 
 
 def test_action_plain():
@@ -56,7 +57,8 @@ def test_action_plain():
     t = render_plain(r)
     assert "▶ 投喂" in t
     assert "饱腹 +22" in t
-    assert "[🍙 加餐]" in t
+    assert "[🫧 逗鱼]" in t and "[💧 净水]" in t
+    assert "[🍙 加餐]" not in t
 
 
 def test_not_ok_plain():
@@ -66,7 +68,7 @@ def test_not_ok_plain():
     t = render_plain(r)
     assert "⚠" in t and "大肥鱼的悄悄话" in t
     assert "消化" in t and "小游戏" in t
-    assert [b.label for b in r.buttons] == ["🐟 看看鱼塘", "🎮 小游戏"]
+    assert [b.label for b in r.buttons] == ["📚 更多", "🎮 小游戏"]
 
 
 def test_game_open_plain():
