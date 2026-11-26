@@ -650,7 +650,7 @@ class DaFeiYuPlugin(Star):
                     reward = await asyncio.to_thread(pond.chat_reward, uid, _sender_name(event))
                 if reward:
                     item = "白饭" if reward == "rice" else "Token"
-                    yield event.plain_result(f"和大肥鱼聊得开心，获得了 {item} ×1！")
+                    yield event.plain_result(f"大肥鱼和你聊的很开心，意外获得了 {item} ×1！发送「/养鱼」打开面板，继续使用道具陪我玩吧～")
             except Exception:
                 logger.exception("[肥鱼养成记] 群聊奖励处理失败")
 

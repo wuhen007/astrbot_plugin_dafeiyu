@@ -235,7 +235,7 @@ def test_group_chat_reward_requires_mention_or_name(plugin, monkeypatch):
     event.get_self_id = lambda: "bot"
     event.get_messages = lambda: [types.SimpleNamespace(type="At", qq="bot")]
     results = _run(_gather(p.on_chat_reward(event)))
-    expected = "和大肥鱼聊得开心，获得了 白饭 ×1！"
+    expected = "大肥鱼和你聊的很开心，意外获得了 白饭 ×1！发送「/养鱼」打开面板，继续使用道具陪我玩吧～"
     assert _texts(results[0]) == [expected]
     assert list((tmp / "ponds").glob("*.json"))
 
