@@ -658,13 +658,37 @@ class Pond:
             cooling = self._daily_cooldown_labels(uid)
             if cooling:
                 lines = [
-                    f"刚才陪大肥鱼做过：{'、'.join(cooling)}，这些互动还在休息。",
-                    "换个方式继续陪它吧，下面只展示当前可以玩的互动。",
+                    f"刚才我们一起{'、'.join(cooling)}，这些互动还在休息呢～",
+                    "不过我还想和你玩，点下面能用的按钮，换个方式陪我吧！",
                 ]
-            elif buttons:
-                lines = ["按大肥鱼当前状态，先把适合的日常互动放在这里啦。"]
             else:
-                lines = ["大肥鱼现在状态不错，日常照料暂时没有特别急的项目。"]
+                commands = {button.command for button in buttons}
+                needs = []
+                if commands.intersection({"养鱼 投喂", "养鱼 加餐"}):
+                    needs.append("肚子有点空")
+                if "养鱼 逗鱼" in commands:
+                    needs.append("有点无聊")
+                if "养鱼 净水" in commands:
+                    needs.append("想把水弄干净")
+
+                if needs:
+                    lines = [f"我现在{'、'.join(needs)}，来陪我做点什么吧～"]
+                else:
+                    available = [
+                        label
+                        for command, label in (
+                            ("养鱼 签到", "签个到"),
+                            ("养鱼 钓鱼", "钓钓鱼"),
+                            ("养鱼 许愿", "许个愿"),
+                        )
+                        if command in commands
+                    ]
+                    if available:
+                        lines = [f"我今天状态不错，来{'、'.join(available)}吧～"]
+                    else:
+                        lines = [
+                            "我今天状态不错，暂时没有急着照料的地方，去小游戏看看还能怎么玩吧～"
+                        ]
             buttons.extend([
                 Button("🎮 小游戏", "养鱼 小游戏"),
                 Button("📚 更多", "养鱼 更多"),
@@ -695,7 +719,10 @@ class Pond:
         ])
         return ActionResult(
             title="更多功能",
-            lines=["称重、排行、档案和鱼塘面板先收在这里，需要时再来看看。"],
+            lines=[
+                "想看看我长了多重、谁最常来陪我，或翻翻以前的鱼塘故事？"
+                "入口都在这里，也可以从下面继续日常互动和小游戏～"
+            ],
             buttons=buttons,
         )
 

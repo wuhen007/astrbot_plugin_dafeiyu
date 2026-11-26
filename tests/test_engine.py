@@ -62,9 +62,35 @@ def test_daily_menu_hides_cooldowns_and_suggests_other_interactions():
         assert command not in commands
     for label in ("投喂", "加餐", "逗鱼", "净水", "钓鱼"):
         assert label in text
-    assert "换个方式继续陪它" in text
+    assert "刚才我们一起" in text
+    assert "这些互动还在休息呢" in text
+    assert "点下面能用的按钮，换个方式陪我吧" in text
     assert "养鱼 签到" in commands
     assert "养鱼 许愿" in commands
+
+
+def test_daily_menu_invitation_reflects_available_care_actions():
+    pond, _ = make_pond(start_satiety=30, start_mood=20, start_clean=20)
+    daily = pond.handle("u1", "小明", "更多", "日常")
+    text = " ".join(daily.lines)
+
+    assert "肚子有点空" in text
+    assert "有点无聊" in text
+    assert "想把水弄干净" in text
+
+
+def test_daily_menu_suggests_only_available_non_care_actions():
+    pond, _ = make_pond(start_satiety=95, start_mood=95, start_clean=95)
+    pond.handle("u1", "小明", "签到")
+    user = pond.state.users["u1"]
+    user.rice = 0
+    daily = pond.handle("u1", "小明", "更多", "日常")
+    text = " ".join(daily.lines)
+
+    assert "我今天状态不错" in text
+    assert "钓钓鱼" in text
+    assert "签个到" not in text
+    assert "许个愿" not in text
 
 
 def test_feed_basic():
@@ -109,6 +135,8 @@ def test_more_menu_folds_secondary_navigation_and_game_results_fold_daily_action
     assert "养鱼 排行" in commands
     assert "养鱼 档案" in commands
     assert "养鱼" in commands
+    assert "想看看我长了多重" in " ".join(more.lines)
+    assert "继续日常互动和小游戏" in " ".join(more.lines)
 
     game_commands = [button.command for button in pond._game_result_buttons()]
     assert "养鱼 更多 日常" in game_commands
